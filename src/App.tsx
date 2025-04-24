@@ -63,6 +63,10 @@ const App: React.FC = () => {
 
       setMediaItems(prev => [...prev, newMediaItem]);
       setSelectedMedia(newMediaItem);
+      setMediaType(type);
+      setMediaUrl(url);
+      setDetectedObjects([]);
+      setTimeline([]);
       setIsProcessing(false);
     }
   };
@@ -127,6 +131,15 @@ const App: React.FC = () => {
     }
   };
 
+  // MediaItem 클릭 핸들러
+  const handleMediaItemClick = (media: MediaItem) => {
+    setSelectedMedia(media);
+    setMediaType(media.type);
+    setMediaUrl(media.url);
+    setDetectedObjects([]); // 이전 검색 결과 초기화
+    setTimeline([]); // 타임라인 초기화
+  };
+
   return (
     <div className="App">
       <h1>찾기</h1>
@@ -189,46 +202,64 @@ const App: React.FC = () => {
 
       {selectedMedia && (
         <div className="selected-media">
-          <div style={{ position: 'relative' }}>
-            {mediaType === 'image' ? (
-              <img 
-                src={mediaUrl} 
-                alt="Selected" 
-                style={{ maxWidth: '100%', maxHeight: '400px' }}
-                ref={imageRef}
-              />
-            ) : (
-              <video
-                ref={videoRef}
-                src={mediaUrl}
-                controls
-                style={{ maxWidth: '100%', maxHeight: '400px' }}
-              />
-            )}
+          <div style={{ 
+            position: 'relative',
+            display: 'inline-block',
+            width: 'fit-content'
+          }}>
+            <img 
+              src={mediaUrl} 
+              alt="Selected" 
+              style={{ 
+                maxWidth: '100%',
+                maxHeight: '400px',
+                display: 'block'
+              }}
+              ref={imageRef}
+            />
             {detectedObjects.map((obj, index) => {
               const img = imageRef.current;
               if (!img) return null;
               
               const rect = img.getBoundingClientRect();
+              console.log("\n=== 클라이언트 좌표 디버깅 ===");
+              console.log("텍스트:", obj.text);
+              console.log("원본 좌표:", obj.bbox);
+              console.log("이미지 실제 크기:", {
+                naturalWidth: img.naturalWidth,
+                naturalHeight: img.naturalHeight
+              });
+              console.log("화면 표시 크기:", {
+                width: rect.width,
+                height: rect.height
+              });
+              
               const scaleX = rect.width / img.naturalWidth;
               const scaleY = rect.height / img.naturalHeight;
+              
+              // 이미지 내에서의 상대 위치 계산
+              const relativeX = obj.bbox.x1 * scaleX;
+              const relativeY = obj.bbox.y1 * scaleY;
+              
+              console.log("스케일:", { scaleX, scaleY });
+              console.log("계산된 상대 위치:", { relativeX, relativeY });
+              
+              const circleSize = 20;
               
               return (
                 <div
                   key={index}
                   style={{
                     position: 'absolute',
-                    left: `${obj.bbox.x1 * scaleX}px`,
-                    top: `${obj.bbox.y1 * scaleY}px`,
-                    width: `${(obj.bbox.x2 - obj.bbox.x1) * scaleX}px`,
-                    height: `${(obj.bbox.y2 - obj.bbox.y1) * scaleY}px`,
-                    backgroundColor: 'rgba(255, 255, 0, 0.5)',
-                    borderBottom: '2px solid rgba(255, 200, 0, 0.8)',
-                    mixBlendMode: 'multiply',
+                    left: `${relativeX - circleSize/2}px`,
+                    top: `${relativeY - circleSize/2}px`,
+                    width: `${circleSize}px`,
+                    height: `${circleSize}px`,
+                    border: '2px solid red',
+                    borderRadius: '50%',
                     pointerEvents: 'none',
                     zIndex: 1,
-                    boxShadow: 'inset 0 0 2px rgba(255, 255, 0, 0.8)',
-                    outline: '1px solid rgba(255, 255, 0, 0.3)'
+                    backgroundColor: 'transparent'
                   }}
                 />
               );
@@ -269,10 +300,7 @@ const App: React.FC = () => {
             <div
               key={media.id}
               className={`media-item ${selectedMedia?.id === media.id ? 'selected' : ''}`}
-              onClick={() => {
-                setSelectedMedia(media);
-                setDetectedObjects([]);
-              }}
+              onClick={() => handleMediaItemClick(media)}
             >
               <img src={media.url} alt="Uploaded" />
             </div>
