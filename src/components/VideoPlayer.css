@@ -1,0 +1,50 @@
+.video-player {
+  position: relative;
+  width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.video-element {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.custom-controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.custom-controls button {
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+  padding: 5px 10px;
+}
+
+.custom-controls button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.time-display {
+  color: white;
+  font-family: monospace;
+}
+
+.volume-slider {
+  width: 100px;
+}
+
+/* Hide native controls when custom controls are shown */
+.video-element::-webkit-media-controls {
+  display: none !important;
+} 
