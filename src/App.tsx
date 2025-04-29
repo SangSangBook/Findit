@@ -61,13 +61,75 @@ const App: React.FC = () => {
         file
       };
 
-      setMediaItems(prev => [...prev, newMediaItem]);
-      setSelectedMedia(newMediaItem);
-      setMediaType(type);
-      setMediaUrl(url);
-      setDetectedObjects([]);
-      setTimeline([]);
-      setIsProcessing(false);
+      try {
+        const formData = new FormData();
+        formData.append(type === 'video' ? 'video' : 'image', file);
+
+        console.log('Uploading file:', file.name, 'Type:', type);
+        
+        // 서버 URL 확인
+        const serverUrl = 'http://localhost:5001';
+        const endpoint = type === 'video' ? 'upload' : 'upload-image';
+        const fullUrl = `${serverUrl}/${endpoint}`;
+        
+        console.log('Uploading to:', fullUrl);
+        
+        const response = await fetch(fullUrl, {
+          method: 'POST',
+          body: formData,
+          headers: {
+            'Accept': 'application/json',
+          },
+        });
+
+        console.log('Server response status:', response.status);
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          console.error('Upload error:', errorData);
+          throw new Error(errorData.error || '파일 업로드에 실패했습니다');
+        }
+
+        const data = await response.json();
+        console.log('Upload successful:', data);
+        
+        // 서버 응답이 성공적일 때만 미디어 아이템 추가 및 선택
+        setMediaItems(prev => [...prev, newMediaItem]);
+        setSelectedMedia(newMediaItem);
+        setMediaType(type);
+        setMediaUrl(url);
+        setDetectedObjects([]);
+        setTimeline([]);
+
+        // 비디오인 경우 자막 추출 시작
+        if (type === 'video' && data.file_url) {
+          const filename = data.file_url.split('/').pop();
+          if (filename) {
+            try {
+              const subtitleResponse = await fetch(`${serverUrl}/extract-subtitles/${filename}`, {
+                method: 'POST',
+                headers: {
+                  'Accept': 'application/json',
+                },
+              });
+
+              if (subtitleResponse.ok) {
+                const subtitleData = await subtitleResponse.json();
+                console.log('Subtitles extracted:', subtitleData);
+                // 자막 데이터 처리 (필요한 경우)
+              }
+            } catch (error) {
+              console.error('Subtitle extraction error:', error);
+              // 자막 추출 실패는 무시 (비디오 재생에는 영향 없음)
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Upload error:', error);
+        setError(error instanceof Error ? error.message : '업로드 중 오류가 발생했습니다');
+      } finally {
+        setIsProcessing(false);
+      }
     }
   };
 
@@ -202,70 +264,52 @@ const App: React.FC = () => {
 
       {selectedMedia && (
         <div className="selected-media">
-          <div style={{ 
-            position: 'relative',
-            display: 'inline-block',
-            width: 'fit-content'
-          }}>
-            <img 
+          {selectedMedia.type === 'video' ? (
+            <video 
               src={mediaUrl} 
-              alt="Selected" 
-              style={{ 
-                maxWidth: '100%',
-                maxHeight: '400px',
-                display: 'block'
-              }}
-              ref={imageRef}
+              controls 
+              className="selected-video"
+              ref={videoRef}
             />
-            {detectedObjects.map((obj, index) => {
-              const img = imageRef.current;
-              if (!img) return null;
-              
-              const rect = img.getBoundingClientRect();
-              console.log("\n=== 클라이언트 좌표 디버깅 ===");
-              console.log("텍스트:", obj.text);
-              console.log("원본 좌표:", obj.bbox);
-              console.log("이미지 실제 크기:", {
-                naturalWidth: img.naturalWidth,
-                naturalHeight: img.naturalHeight
-              });
-              console.log("화면 표시 크기:", {
-                width: rect.width,
-                height: rect.height
-              });
-              
-              const scaleX = rect.width / img.naturalWidth;
-              const scaleY = rect.height / img.naturalHeight;
-              
-              // 이미지 내에서의 상대 위치 계산
-              const relativeX = obj.bbox.x1 * scaleX;
-              const relativeY = obj.bbox.y1 * scaleY;
-              
-              console.log("스케일:", { scaleX, scaleY });
-              console.log("계산된 상대 위치:", { relativeX, relativeY });
-              
-              const circleSize = 20;
-              
-              return (
-                <div
-                  key={index}
-                  style={{
-                    position: 'absolute',
-                    left: `${relativeX - circleSize/2}px`,
-                    top: `${relativeY - circleSize/2}px`,
-                    width: `${circleSize}px`,
-                    height: `${circleSize}px`,
-                    border: '2px solid red',
-                    borderRadius: '50%',
-                    pointerEvents: 'none',
-                    zIndex: 1,
-                    backgroundColor: 'transparent'
-                  }}
-                />
-              );
-            })}
-          </div>
-
+          ) : (
+            <div style={{ position: 'relative', display: 'inline-block' }}>
+              <img 
+                src={mediaUrl} 
+                alt="Selected" 
+                ref={imageRef}
+                style={{ maxWidth: '100%', maxHeight: '400px' }}
+              />
+              {detectedObjects.map((obj, index) => {
+                const img = imageRef.current;
+                if (!img) return null;
+                
+                const rect = img.getBoundingClientRect();
+                const scaleX = rect.width / img.naturalWidth;
+                const scaleY = rect.height / img.naturalHeight;
+                
+                const relativeX = obj.bbox.x1 * scaleX;
+                const relativeY = obj.bbox.y1 * scaleY;
+                
+                return (
+                  <div
+                    key={index}
+                    style={{
+                      position: 'absolute',
+                      left: `${relativeX - 10}px`,
+                      top: `${relativeY - 10}px`,
+                      width: '20px',
+                      height: '20px',
+                      border: '2px solid yellow',
+                      borderRadius: '50%',
+                      pointerEvents: 'none',
+                      zIndex: 1
+                    }}
+                  />
+                );
+              })}
+            </div>
+          )}
+          
           {timeline.length > 0 && (
             <div className="timeline-container">
               <h3>타임라인</h3>
@@ -302,7 +346,11 @@ const App: React.FC = () => {
               className={`media-item ${selectedMedia?.id === media.id ? 'selected' : ''}`}
               onClick={() => handleMediaItemClick(media)}
             >
-              <img src={media.url} alt="Uploaded" />
+              {media.type === 'video' ? (
+                <video src={media.url} className="media-preview" />
+              ) : (
+                <img src={media.url} alt="Uploaded" className="media-preview" />
+              )}
             </div>
           ))}
         </div>
