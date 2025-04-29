@@ -13,8 +13,8 @@ Findit은 이미지와 비디오에서 텍스트를 추출하고 분석하는 �
 
 - Frontend: React, TypeScript
 - Backend: Python, Flask
-- OCR: EasyOCR, PaddleOCR, Tesseract
-- AI: OpenAI GPT
+- OCR: ((EasyOCR, PaddleOCR, Tesseract)) -> Google Vision(25.04.29)
+- AI: OpenAI GPT3.5-turbo -> GPT4.0(??)
 
 ## 설치 및 실행 방법
 
