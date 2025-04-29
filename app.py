@@ -20,6 +20,74 @@ from collections import defaultdict
 # Load environment variables from .env file
 load_dotenv()
 
+# OpenAI API 키 설정
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+if not OPENAI_API_KEY:
+    print("경고: OPENAI_API_KEY가 설정되지 않았습니다.")
+else:
+    print(f"OpenAI API 키가 설정되었습니다. (길이: {len(OPENAI_API_KEY)}자)")
+    openai.api_key = OPENAI_API_KEY
+
+# Google Cloud Vision API 설정
+API_KEY = os.getenv('GOOGLE_CLOUD_VISION_API_KEY')
+VISION_API_URL = f'https://vision.googleapis.com/v1/images:annotate?key={API_KEY}'
+
+# 연관어 캐시
+related_words_cache = {}
+
+def get_related_words(query, ocr_texts):
+    """OCR에서 추출된 텍스트 중에서 연관어를 찾습니다."""
+    if query in related_words_cache:
+        print(f"캐시에서 연관어를 가져옵니다: {query}")
+        return related_words_cache[query]
+    
+    max_retries = 2
+    retry_delay = 5
+    
+    for attempt in range(max_retries):
+        try:
+            prompt = f"""
+            다음은 OCR로 추출된 텍스트 목록입니다:
+            {ocr_texts}
+            
+            이 텍스트들 중에서 '{query}'와 관련된 단어들을 찾아주세요.
+            예를 들어:
+            - '음식'으로 검색했을 때: '닭', '갈비', '고기' 등
+            - '사람'으로 검색했을 때: '김우진', '시우리' 등
+            
+            결과는 쉼표로 구분된 단어 목록으로 반환해주세요.
+            OCR에서 추출된 텍스트만 사용해주세요.
+            """
+            
+            client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "당신은 전문적인 언어 분석가입니다. 주어진 텍스트 목록에서만 연관어를 찾아야 합니다."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=100
+            )
+            
+            related_words = response.choices[0].message.content.strip().split(',')
+            related_words = [word.strip() for word in related_words]
+            related_words.append(query)  # 원래 검색어도 포함
+            
+            # 캐시에 저장
+            related_words_cache[query] = related_words
+            print(f"새로운 연관어를 캐시에 저장했습니다: {query}")
+            print(f"찾은 연관어 목록: {related_words}")
+            return related_words
+            
+        except Exception as e:
+            print(f"GPT API 호출 중 오류 발생 (시도 {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                print(f"{retry_delay}초 후 재시도합니다...")
+                time.sleep(retry_delay)
+            else:
+                print("최대 재시도 횟수 초과로 빈 리스트를 반환합니다.")
+                return [query]  # 실패 시 원래 검색어만 반환
+
 # Flask 앱 초기화
 app = Flask(__name__)
 CORS(app, resources={
@@ -29,13 +97,6 @@ CORS(app, resources={
         "allow_headers": ["Content-Type", "Accept"]
     }
 })
-
-# Set OpenAI API key from environment variable
-openai.api_key = os.getenv('OPENAI_API_KEY')
-
-# Google Cloud Vision API 설정
-API_KEY = os.getenv('GOOGLE_CLOUD_VISION_API_KEY')
-VISION_API_URL = f'https://vision.googleapis.com/v1/images:annotate?key={API_KEY}'
 
 # 업로드 파일이 저장될 경로 설정
 UPLOAD_FOLDER = 'uploads'
@@ -196,59 +257,98 @@ def process_image(image_path):
 
 def analyze_image(image_path, query, mode='normal'):
     try:
+        print(f"이미지 분석 시작: {image_path}")
+        print(f"검색어: '{query}', 모드: {mode}")
+        
         # OCR로 텍스트 추출
         ocr_text, coordinates = extract_text_with_vision(image_path)
         detected_objects = []
         
+        print(f"검색 가능한 텍스트 목록: {list(coordinates.keys())}")
+        
         if mode == 'smart':
-            # 연관어 검색을 위한 GPT 프롬프트
-            prompt = f"""
-            '{query}'와 관련된 동의어, 상위어, 하위어, 연관어를 찾아주세요.
-            예시:
-            - 동의어: 같은 의미의 단어
-            - 상위어: 더 넓은 범주의 단어
-            - 하위어: 더 구체적인 단어
-            - 연관어: 관련이 있는 단어
-            
-            결과는 쉼표로 구분된 단어 목록으로 반환해주세요.
-            """
-            
-            client = openai.OpenAI()
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "당신은 전문적인 언어 분석가입니다."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=100
-            )
-            
-            related_words = response.choices[0].message.content.strip().split(',')
-            related_words = [word.strip() for word in related_words]
-            related_words.append(query)  # 원래 검색어도 포함
-            
+            # OCR에서 추출된 텍스트를 기반으로 연관어를 찾음
+            ocr_texts = list(coordinates.keys())
+            related_words = get_related_words(query, ocr_texts)
             print(f"연관어 목록: {related_words}")
             
+            # 연관어를 단어별로 분리하여 저장
+            related_words_list = []
+            for word in related_words:
+                # 쉼표로 구분된 단어들을 분리
+                words = word.split(',')
+                for w in words:
+                    # 숫자와 특수문자 제거
+                    w = re.sub(r'[0-9\W]+', '', w.strip())
+                    if w and len(w) > 1:  # 한 글자 이상인 단어만 포함
+                        related_words_list.append(w)
+            
+            print(f"처리된 연관어 목록: {related_words_list}")
+        
+        # 인접한 텍스트를 조합하여 새로운 텍스트 생성
+        combined_texts = {}
+        text_items = list(coordinates.items())
+        for i in range(len(text_items) - 1):
+            current_text, current_data = text_items[i]
+            next_text, next_data = text_items[i + 1]
+            
+            # 현재 텍스트와 다음 텍스트의 바운딩 박스가 가까운지 확인
+            current_bbox = current_data['bbox']
+            next_bbox = next_data['bbox']
+            
+            # x 좌표가 가까운지 확인 (같은 줄에 있는지)
+            if abs(current_bbox['x2'] - next_bbox['x1']) < 50:  # 50픽셀 이내
+                combined_text = current_text + next_text
+                combined_bbox = {
+                    'x1': min(current_bbox['x1'], next_bbox['x1']),
+                    'y1': min(current_bbox['y1'], next_bbox['y1']),
+                    'x2': max(current_bbox['x2'], next_bbox['x2']),
+                    'y2': max(current_bbox['y2'], next_bbox['y2'])
+                }
+                combined_texts[combined_text] = {
+                    'bbox': combined_bbox,
+                    'confidence': min(current_data['confidence'], next_data['confidence'])
+                }
+        
+        # 원본 텍스트와 조합된 텍스트를 모두 사용
+        all_texts = {**coordinates, **combined_texts}
+        
+        if mode == 'smart':
             # OCR에서 추출한 텍스트 중 연관어와 매칭되는 것 찾기
-            for text, data in coordinates.items():
-                text_lower = text.lower()
-                for word in related_words:
-                    if word.lower() in text_lower:
+            for text, data in all_texts.items():
+                text_lower = text.lower().strip()
+                # 특수문자와 공백 제거
+                text_clean = re.sub(r'[^\w\s]', '', text_lower)
+                
+                # 연관어 목록과 비교
+                for word in related_words_list:
+                    word_lower = word.lower().strip()
+                    # 완전한 단어 매칭만 수행
+                    if text_clean == word_lower:
+                        print(f"매칭 발견: '{text}' (연관어: '{word}')")
                         detected_objects.append({
                             'text': text,
-                            'bbox': data['bbox']
+                            'bbox': data['bbox'],
+                            'color': 'yellow'  # 연관어는 노란색
                         })
                         break  # 한 번 매칭되면 다음 텍스트로 넘어감
         else:
             # 일반 검색
-            query_lower = query.lower()
-            for text, data in coordinates.items():
-                text_lower = text.lower()
-                if query_lower in text_lower:
+            query_lower = query.lower().strip()
+            for text, data in all_texts.items():
+                text_lower = text.lower().strip()
+                # 완전한 단어 매칭만 수행
+                if text_lower == query_lower:
+                    print(f"매칭 발견: '{text}' (검색어: '{query}')")
                     detected_objects.append({
                         'text': text,
-                        'bbox': data['bbox']
+                        'bbox': data['bbox'],
+                        'color': 'red'  # 일반 검색은 빨간색
                     })
+        
+        print(f"검색 결과: {len(detected_objects)}개의 매칭된 텍스트 발견")
+        for obj in detected_objects:
+            print(f"매칭된 텍스트: {obj['text']}")
         
         return detected_objects
     except Exception as e:
@@ -285,9 +385,18 @@ def extract_text_with_vision(image_path):
     try:
         print(f"OCR 시작: {image_path}")
         
+        # 이미지 파일 존재 확인
+        if not os.path.exists(image_path):
+            print(f"이미지 파일이 존재하지 않습니다: {image_path}")
+            return "", {}
+            
         # 이미지 읽기
-        with open(image_path, 'rb') as image_file:
-            content = base64.b64encode(image_file.read()).decode('utf-8')
+        try:
+            with open(image_path, 'rb') as image_file:
+                content = base64.b64encode(image_file.read()).decode('utf-8')
+        except Exception as e:
+            print(f"이미지 파일 읽기 오류: {str(e)}")
+            return "", {}
         
         # API 요청 데이터 준비
         request_data = {
@@ -306,39 +415,51 @@ def extract_text_with_vision(image_path):
         }
         
         # API 호출
-        response = requests.post(VISION_API_URL, json=request_data)
-        response.raise_for_status()
-        result = response.json()
+        try:
+            response = requests.post(VISION_API_URL, json=request_data)
+            response.raise_for_status()
+            result = response.json()
+        except Exception as e:
+            print(f"Google Vision API 호출 오류: {str(e)}")
+            return "", {}
         
         coordinates = {}
         if 'responses' in result and result['responses']:
             if 'textAnnotations' in result['responses'][0]:
                 for text in result['responses'][0]['textAnnotations'][1:]:  # 첫 번째는 전체 텍스트이므로 건너뛰기
-                    vertices = text['boundingPoly']['vertices']
-                    x_coords = [vertex['x'] for vertex in vertices]
-                    y_coords = [vertex['y'] for vertex in vertices]
-                    
-                    # 첫 글자의 좌표만 사용
-                    first_char_bbox = {
-                        'x1': x_coords[0],
-                        'y1': y_coords[0],
-                        'x2': x_coords[1],
-                        'y2': y_coords[2]
-                    }
-                    
-                    print(f"인식된 텍스트: '{text['description']}'")
-                    
-                    coordinates[text['description']] = {
-                        'bbox': first_char_bbox,
-                        'confidence': 1.0  # API 키 방식에서는 신뢰도를 제공하지 않음
-                    }
+                    try:
+                        vertices = text['boundingPoly']['vertices']
+                        x_coords = [vertex['x'] for vertex in vertices]
+                        y_coords = [vertex['y'] for vertex in vertices]
+                        
+                        # 전체 텍스트의 바운딩 박스 사용
+                        bbox = {
+                            'x1': min(x_coords),
+                            'y1': min(y_coords),
+                            'x2': max(x_coords),
+                            'y2': max(y_coords)
+                        }
+                        
+                        text_content = text['description'].strip()
+                        print(f"OCR 인식된 텍스트: '{text_content}'")
+                        
+                        # 텍스트가 비어있지 않은 경우에만 저장
+                        if text_content:
+                            coordinates[text_content] = {
+                                'bbox': bbox,
+                                'confidence': 1.0  # API 키 방식에서는 신뢰도를 제공하지 않음
+                            }
+                    except Exception as e:
+                        print(f"텍스트 처리 중 오류: {str(e)}")
+                        continue
         
-        # 세로 텍스트 처리
-        combined_coordinates = combine_vertical_texts(coordinates)
+        # 세로 텍스트 처리 비활성화
+        combined_coordinates = coordinates
         
         recognized_text = ' '.join(combined_coordinates.keys())
         print(f"OCR 결과: {len(combined_coordinates)}개의 텍스트 발견")
         print(f"전체 텍스트: {recognized_text}")
+        print(f"저장된 텍스트 목록: {list(combined_coordinates.keys())}")
         
         return recognized_text, combined_coordinates
         
@@ -487,12 +608,41 @@ def extract_frames_from_video(video_path, interval=1.0):
     cap.release()
     return frames, timestamps
 
-def process_video(video_path, query):
+def process_video(video_path, query, mode='normal'):
     """비디오 처리 및 타임라인 생성"""
     print(f"비디오 처리 시작: {video_path}")
     frames, timestamps = extract_frames_from_video(video_path)
     
     timeline_results = []
+    
+    if mode == 'smart':
+        # 연관어 검색을 위한 GPT 프롬프트
+        prompt = f"""
+        '{query}'와 관련된 동의어, 상위어, 하위어, 연관어를 찾아주세요.
+        예시:
+        - 동의어: 같은 의미의 단어
+        - 상위어: 더 넓은 범주의 단어
+        - 하위어: 더 구체적인 단어
+        - 연관어: 관련이 있는 단어
+        
+        결과는 쉼표로 구분된 단어 목록으로 반환해주세요.
+        """
+        
+        client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "당신은 전문적인 언어 분석가입니다."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=100
+        )
+        
+        related_words = response.choices[0].message.content.strip().split(',')
+        related_words = [word.strip() for word in related_words]
+        related_words.append(query)  # 원래 검색어도 포함
+        
+        print(f"연관어 목록: {related_words}")
     
     for frame, timestamp in zip(frames, timestamps):
         # 프레임을 임시 이미지 파일로 저장
@@ -506,13 +656,26 @@ def process_video(video_path, query):
             if coordinates:
                 detected_texts = []
                 for text, data in coordinates.items():
-                    # 쿼리와 매칭되는 텍스트 찾기
-                    if query.lower() in text.lower():
-                        detected_texts.append({
-                            'text': text,
-                            'confidence': data['confidence'],
-                            'bbox': data['bbox']
-                        })
+                    if mode == 'smart':
+                        # 연관어 검색
+                        for word in related_words:
+                            if word.lower() in text.lower():
+                                detected_texts.append({
+                                    'text': text,
+                                    'confidence': data['confidence'],
+                                    'bbox': data['bbox'],
+                                    'color': 'yellow'  # 연관어는 노란색
+                                })
+                                break
+                    else:
+                        # 일반 검색
+                        if query.lower() in text.lower():
+                            detected_texts.append({
+                                'text': text,
+                                'confidence': data['confidence'],
+                                'bbox': data['bbox'],
+                                'color': 'red'  # 일반 검색은 빨간색
+                            })
                 
                 if detected_texts:
                     timeline_results.append({
@@ -644,7 +807,7 @@ def analyze_image_endpoint():
             
             # 비디오 파일 처리
             else:
-                timeline_results = process_video(filepath, query)
+                timeline_results = process_video(filepath, query, mode)
                 return jsonify({
                     'type': 'video',
                     'file_url': f'/uploads/{filename}',

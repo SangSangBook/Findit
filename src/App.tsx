@@ -11,6 +11,7 @@ interface CharBox {
 interface DetectedObject {
   text: string;
   bbox: CharBox;
+  color?: string;
 }
 
 interface MediaItem {
@@ -45,6 +46,7 @@ const App: React.FC = () => {
   const [mediaType, setMediaType] = useState<'image' | 'video'>('image');
   const [mediaUrl, setMediaUrl] = useState<string>('');
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
+  const [searchMode, setSearchMode] = useState<'normal' | 'smart'>('normal');
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -133,6 +135,29 @@ const App: React.FC = () => {
     }
   };
 
+  const drawBoundingBoxes = (canvas: HTMLCanvasElement, objects: any[], mode: string) => {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    objects.forEach(obj => {
+      const { bbox, color } = obj;
+      const { x1, y1, x2, y2 } = bbox;
+      
+      // 색상 설정
+      ctx.strokeStyle = color || (mode === 'smart' ? 'yellow' : 'red');
+      ctx.lineWidth = 2;
+      
+      // 동그라미 그리기
+      const centerX = (x1 + x2) / 2;
+      const centerY = (y1 + y2) / 2;
+      const radius = Math.max((x2 - x1), (y2 - y1)) / 2;
+      
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+      ctx.stroke();
+    });
+  };
+
   const handleSearch = async (mode: 'normal' | 'smart') => {
     if (!searchTerm || !selectedMedia) {
       setDetectedObjects([]);
@@ -163,6 +188,10 @@ const App: React.FC = () => {
         setTimeline([]);
         setMediaType('image');
         setMediaUrl(selectedMedia.url);
+        const canvas = document.getElementById('canvas') as HTMLCanvasElement;
+        if (canvas) {
+          drawBoundingBoxes(canvas, data.objects || [], mode);
+        }
       } else {
         setDetectedObjects([]);
         setTimeline(data.timeline || []);
@@ -287,8 +316,10 @@ const App: React.FC = () => {
                 const scaleX = rect.width / img.naturalWidth;
                 const scaleY = rect.height / img.naturalHeight;
                 
-                const relativeX = obj.bbox.x1 * scaleX;
-                const relativeY = obj.bbox.y1 * scaleY;
+                const bbox = obj.bbox;
+                // 첫 글자의 좌표만 사용
+                const relativeX = bbox.x1 * scaleX;
+                const relativeY = bbox.y1 * scaleY;
                 
                 return (
                   <div
@@ -299,7 +330,7 @@ const App: React.FC = () => {
                       top: `${relativeY - 10}px`,
                       width: '20px',
                       height: '20px',
-                      border: '2px solid yellow',
+                      border: `2px solid ${obj.color || (searchMode === 'smart' ? 'yellow' : 'red')}`,
                       borderRadius: '50%',
                       pointerEvents: 'none',
                       zIndex: 1
