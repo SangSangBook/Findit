@@ -20,6 +20,74 @@ from collections import defaultdict
 # Load environment variables from .env file
 load_dotenv()
 
+# OpenAI API 키 설정
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+if not OPENAI_API_KEY:
+    print("경고: OPENAI_API_KEY가 설정되지 않았습니다.")
+else:
+    print(f"OpenAI API 키가 설정되었습니다. (길이: {len(OPENAI_API_KEY)}자)")
+    openai.api_key = OPENAI_API_KEY
+
+# Google Cloud Vision API 설정
+API_KEY = os.getenv('GOOGLE_CLOUD_VISION_API_KEY')
+VISION_API_URL = f'https://vision.googleapis.com/v1/images:annotate?key={API_KEY}'
+
+# 연관어 캐시
+related_words_cache = {}
+
+def get_related_words(query, ocr_texts):
+    """OCR에서 추출된 텍스트 중에서 연관어를 찾습니다."""
+    if query in related_words_cache:
+        print(f"캐시에서 연관어를 가져옵니다: {query}")
+        return related_words_cache[query]
+    
+    max_retries = 2
+    retry_delay = 5
+    
+    for attempt in range(max_retries):
+        try:
+            prompt = f"""
+            다음은 OCR로 추출된 텍스트 목록입니다:
+            {ocr_texts}
+            
+            이 텍스트들 중에서 '{query}'와 관련된 단어들을 찾아주세요.
+            예를 들어:
+            - '음식'으로 검색했을 때: '닭', '갈비', '고기' 등
+            - '사람'으로 검색했을 때: '김우진', '시우리' 등
+            
+            결과는 쉼표로 구분된 단어 목록으로 반환해주세요.
+            OCR에서 추출된 텍스트만 사용해주세요.
+            """
+            
+            client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "당신은 전문적인 언어 분석가입니다. 주어진 텍스트 목록에서만 연관어를 찾아야 합니다."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=100
+            )
+            
+            related_words = response.choices[0].message.content.strip().split(',')
+            related_words = [word.strip() for word in related_words]
+            related_words.append(query)  # 원래 검색어도 포함
+            
+            # 캐시에 저장
+            related_words_cache[query] = related_words
+            print(f"새로운 연관어를 캐시에 저장했습니다: {query}")
+            print(f"찾은 연관어 목록: {related_words}")
+            return related_words
+            
+        except Exception as e:
+            print(f"GPT API 호출 중 오류 발생 (시도 {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                print(f"{retry_delay}초 후 재시도합니다...")
+                time.sleep(retry_delay)
+            else:
+                print("최대 재시도 횟수 초과로 빈 리스트를 반환합니다.")
+                return [query]  # 실패 시 원래 검색어만 반환
+
 # Flask 앱 초기화
 app = Flask(__name__)
 CORS(app, resources={
@@ -29,13 +97,6 @@ CORS(app, resources={
         "allow_headers": ["Content-Type", "Accept"]
     }
 })
-
-# Set OpenAI API key from environment variable
-openai.api_key = os.getenv('OPENAI_API_KEY')
-
-# Google Cloud Vision API 설정
-API_KEY = os.getenv('GOOGLE_CLOUD_VISION_API_KEY')
-VISION_API_URL = f'https://vision.googleapis.com/v1/images:annotate?key={API_KEY}'
 
 # 업로드 파일이 저장될 경로 설정
 UPLOAD_FOLDER = 'uploads'
@@ -205,6 +266,25 @@ def analyze_image(image_path, query, mode='normal'):
         
         print(f"검색 가능한 텍스트 목록: {list(coordinates.keys())}")
         
+        if mode == 'smart':
+            # OCR에서 추출된 텍스트를 기반으로 연관어를 찾음
+            ocr_texts = list(coordinates.keys())
+            related_words = get_related_words(query, ocr_texts)
+            print(f"연관어 목록: {related_words}")
+            
+            # 연관어를 단어별로 분리하여 저장
+            related_words_list = []
+            for word in related_words:
+                # 쉼표로 구분된 단어들을 분리
+                words = word.split(',')
+                for w in words:
+                    # 숫자와 특수문자 제거
+                    w = re.sub(r'[0-9\W]+', '', w.strip())
+                    if w and len(w) > 1:  # 한 글자 이상인 단어만 포함
+                        related_words_list.append(w)
+            
+            print(f"처리된 연관어 목록: {related_words_list}")
+        
         # 인접한 텍스트를 조합하여 새로운 텍스트 생성
         combined_texts = {}
         text_items = list(coordinates.items())
@@ -234,40 +314,17 @@ def analyze_image(image_path, query, mode='normal'):
         all_texts = {**coordinates, **combined_texts}
         
         if mode == 'smart':
-            # 연관어 검색을 위한 GPT 프롬프트
-            prompt = f"""
-            '{query}'와 관련된 동의어, 상위어, 하위어, 연관어를 찾아주세요.
-            예시:
-            - 동의어: 같은 의미의 단어
-            - 상위어: 더 넓은 범주의 단어
-            - 하위어: 더 구체적인 단어
-            - 연관어: 관련이 있는 단어
-            
-            결과는 쉼표로 구분된 단어 목록으로 반환해주세요.
-            """
-            
-            client = openai.OpenAI()
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "당신은 전문적인 언어 분석가입니다."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=100
-            )
-            
-            related_words = response.choices[0].message.content.strip().split(',')
-            related_words = [word.strip() for word in related_words]
-            related_words.append(query)  # 원래 검색어도 포함
-            
-            print(f"연관어 목록: {related_words}")
-            
             # OCR에서 추출한 텍스트 중 연관어와 매칭되는 것 찾기
             for text, data in all_texts.items():
                 text_lower = text.lower().strip()
-                for word in related_words:
+                # 특수문자와 공백 제거
+                text_clean = re.sub(r'[^\w\s]', '', text_lower)
+                
+                # 연관어 목록과 비교
+                for word in related_words_list:
                     word_lower = word.lower().strip()
-                    if word_lower in text_lower:
+                    # 완전한 단어 매칭만 수행
+                    if text_clean == word_lower:
                         print(f"매칭 발견: '{text}' (연관어: '{word}')")
                         detected_objects.append({
                             'text': text,
@@ -280,7 +337,8 @@ def analyze_image(image_path, query, mode='normal'):
             query_lower = query.lower().strip()
             for text, data in all_texts.items():
                 text_lower = text.lower().strip()
-                if query_lower in text_lower:
+                # 완전한 단어 매칭만 수행
+                if text_lower == query_lower:
                     print(f"매칭 발견: '{text}' (검색어: '{query}')")
                     detected_objects.append({
                         'text': text,
@@ -570,7 +628,7 @@ def process_video(video_path, query, mode='normal'):
         결과는 쉼표로 구분된 단어 목록으로 반환해주세요.
         """
         
-        client = openai.OpenAI()
+        client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
