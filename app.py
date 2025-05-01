@@ -59,7 +59,8 @@ def get_related_words(query, ocr_texts):
             OCR에서 추출된 텍스트만 사용해주세요.
             """
             
-            client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            # 이미 설정된 API 키 사용
+            client = openai.OpenAI()
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
