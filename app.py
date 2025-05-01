@@ -59,7 +59,8 @@ def get_related_words(query, ocr_texts):
             OCR에서 추출된 텍스트만 사용해주세요.
             """
             
-            client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            # 이미 설정된 API 키 사용
+            client = openai.OpenAI()
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
@@ -323,8 +324,10 @@ def analyze_image(image_path, query, mode='normal'):
                 # 연관어 목록과 비교
                 for word in related_words_list:
                     word_lower = word.lower().strip()
-                    # 완전한 단어 매칭만 수행
-                    if text_clean == word_lower:
+                    # 단어의 시작이나 끝에서 매칭
+                    if (text_clean == word_lower or  # 완전한 단어 매칭
+                        text_clean.startswith(word_lower) or  # 단어로 시작
+                        text_clean.endswith(word_lower)):  # 단어로 끝남
                         print(f"매칭 발견: '{text}' (연관어: '{word}')")
                         detected_objects.append({
                             'text': text,
@@ -337,8 +340,10 @@ def analyze_image(image_path, query, mode='normal'):
             query_lower = query.lower().strip()
             for text, data in all_texts.items():
                 text_lower = text.lower().strip()
-                # 완전한 단어 매칭만 수행
-                if text_lower == query_lower:
+                # 단어의 시작이나 끝에서 매칭
+                if (text_lower == query_lower or  # 완전한 단어 매칭
+                    text_lower.startswith(query_lower) or  # 단어로 시작
+                    text_lower.endswith(query_lower)):  # 단어로 끝남
                     print(f"매칭 발견: '{text}' (검색어: '{query}')")
                     detected_objects.append({
                         'text': text,
