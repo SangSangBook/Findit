@@ -16,6 +16,11 @@ import re
 import time
 import requests
 from collections import defaultdict
+from openai import OpenAI
+from google.cloud import vision
+from google.oauth2 import service_account
+import googlemaps
+import yt_dlp
 
 # Load environment variables from .env file
 load_dotenv()
@@ -34,6 +39,9 @@ VISION_API_URL = f'https://vision.googleapis.com/v1/images:annotate?key={API_KEY
 
 # 연관어 캐시
 related_words_cache = {}
+
+client = OpenAI()  # 환경 변수에서 자동으로 API 키를 가져옴
+gmaps = googlemaps.Client(key=os.getenv('GOOGLE_CLOUD_VISION_API_KEY'))
 
 def get_related_words(query, ocr_texts):
     """OCR에서 추출된 텍스트 중에서 연관어를 찾습니다."""
@@ -60,7 +68,6 @@ def get_related_words(query, ocr_texts):
             """
             
             # 이미 설정된 API 키 사용
-            client = openai.OpenAI()
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
@@ -93,9 +100,10 @@ def get_related_words(query, ocr_texts):
 app = Flask(__name__)
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://localhost:3000", "http://localhost:5001"],
+        "origins": ["http://localhost:3000", "http://127.0.0.1:3000"],
         "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Accept"]
+        "allow_headers": ["Content-Type", "Accept"],
+        "supports_credentials": True
     }
 })
 
@@ -588,16 +596,21 @@ def semantic_similarity(text1, text2):
     
     return intersection / union if union > 0 else 0.0
 
-def extract_frames_from_video(video_path, interval=1.0):
+def extract_frames_from_video(video_path, interval=1.0, max_frames=None):
     """비디오에서 일정 간격으로 프레임 추출"""
     frames = []
     timestamps = []
     cap = cv2.VideoCapture(video_path)
     
     fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_interval = int(fps * interval)
-    frame_count = 0
     
+    # 최대 프레임 수 계산
+    if max_frames and total_frames > max_frames:
+        frame_interval = total_frames // max_frames
+    
+    frame_count = 0
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -608,6 +621,10 @@ def extract_frames_from_video(video_path, interval=1.0):
             frames.append(frame)
             timestamps.append(timestamp)
             
+            # 최대 프레임 수에 도달하면 중단
+            if max_frames and len(frames) >= max_frames:
+                break
+            
         frame_count += 1
     
     cap.release()
@@ -616,7 +633,17 @@ def extract_frames_from_video(video_path, interval=1.0):
 def process_video(video_path, query, mode='normal'):
     """비디오 처리 및 타임라인 생성"""
     print(f"비디오 처리 시작: {video_path}")
-    frames, timestamps = extract_frames_from_video(video_path)
+    
+    # 비디오 정보 가져오기
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    duration = total_frames / fps
+    cap.release()
+    
+    # 비디오 길이에 따라 최대 프레임 수 조정
+    max_frames = min(100, int(duration * 2))  # 최대 100프레임 또는 2초당 1프레임
+    frames, timestamps = extract_frames_from_video(video_path, interval=1.0, max_frames=max_frames)
     
     timeline_results = []
     
@@ -633,7 +660,6 @@ def process_video(video_path, query, mode='normal'):
         결과는 쉼표로 구분된 단어 목록으로 반환해주세요.
         """
         
-        client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -649,50 +675,60 @@ def process_video(video_path, query, mode='normal'):
         
         print(f"연관어 목록: {related_words}")
     
-    for frame, timestamp in zip(frames, timestamps):
-        # 프레임을 임시 이미지 파일로 저장
-        temp_frame_path = os.path.join(UPLOAD_FOLDER, f'temp_frame_{timestamp}.jpg')
-        cv2.imwrite(temp_frame_path, frame)
+    # 배치 처리할 프레임 수
+    batch_size = 5
+    for i in range(0, len(frames), batch_size):
+        batch_frames = frames[i:i+batch_size]
+        batch_timestamps = timestamps[i:i+batch_size]
         
-        try:
-            # OCR 실행 (Google Cloud Vision API 사용)
-            ocr_text, coordinates = extract_text_with_vision(temp_frame_path)
+        # 배치로 OCR 처리
+        batch_results = []
+        for frame, timestamp in zip(batch_frames, batch_timestamps):
+            # 프레임을 임시 이미지 파일로 저장
+            temp_frame_path = os.path.join(UPLOAD_FOLDER, f'temp_frame_{timestamp}.jpg')
+            cv2.imwrite(temp_frame_path, frame)
             
-            if coordinates:
-                detected_texts = []
-                for text, data in coordinates.items():
-                    if mode == 'smart':
-                        # 연관어 검색
-                        for word in related_words:
-                            if word.lower() in text.lower():
+            try:
+                # OCR 실행 (Google Cloud Vision API 사용)
+                ocr_text, coordinates = extract_text_with_vision(temp_frame_path)
+                
+                if coordinates:
+                    detected_texts = []
+                    for text, data in coordinates.items():
+                        if mode == 'smart':
+                            # 연관어 검색
+                            for word in related_words:
+                                if word.lower() in text.lower():
+                                    detected_texts.append({
+                                        'text': text,
+                                        'confidence': data['confidence'],
+                                        'bbox': data['bbox'],
+                                        'color': 'yellow'  # 연관어는 노란색
+                                    })
+                                    break
+                        else:
+                            # 일반 검색
+                            if query.lower() in text.lower():
                                 detected_texts.append({
                                     'text': text,
                                     'confidence': data['confidence'],
                                     'bbox': data['bbox'],
-                                    'color': 'yellow'  # 연관어는 노란색
+                                    'color': 'red'  # 일반 검색은 빨간색
                                 })
-                                break
-                    else:
-                        # 일반 검색
-                        if query.lower() in text.lower():
-                            detected_texts.append({
-                                'text': text,
-                                'confidence': data['confidence'],
-                                'bbox': data['bbox'],
-                                'color': 'red'  # 일반 검색은 빨간색
-                            })
-                
-                if detected_texts:
-                    timeline_results.append({
-                        'timestamp': timestamp,
-                        'texts': detected_texts
-                    })
-        except Exception as e:
-            print(f"프레임 처리 중 오류 발생: {str(e)}")
-        finally:
-            # 임시 파일 삭제
-            if os.path.exists(temp_frame_path):
-                os.remove(temp_frame_path)
+                    
+                    if detected_texts:
+                        batch_results.append({
+                            'timestamp': timestamp,
+                            'texts': detected_texts
+                        })
+            except Exception as e:
+                print(f"프레임 처리 중 오류 발생: {str(e)}")
+            finally:
+                # 임시 파일 삭제
+                if os.path.exists(temp_frame_path):
+                    os.remove(temp_frame_path)
+        
+        timeline_results.extend(batch_results)
     
     return timeline_results
 
@@ -834,6 +870,192 @@ def analyze_image_endpoint():
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
+
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    data = request.get_json()
+    user_message = data.get('message', '')
+    
+    try:
+        # OpenAI API를 사용하여 메시지 처리
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "당신은 FindIt Assistant입니다. 사용자의 질문에 친절하게 답변하고, 간판이나 장소에 대한 질문이 있으면 위치 정보를 제공해주세요."},
+                {"role": "user", "content": user_message}
+            ]
+        )
+        
+        bot_response = response.choices[0].message.content
+        
+        # 간판이나 장소에 대한 질문인지 확인
+        if any(keyword in user_message.lower() for keyword in ['위치', '어디', '찾아', '간판', '장소']):
+            # Google Maps API를 사용하여 위치 검색
+            try:
+                places_result = gmaps.places(bot_response)
+                if places_result['results']:
+                    place = places_result['results'][0]
+                    location = place['geometry']['location']
+                    return jsonify({
+                        'type': 'map',
+                        'content': f"{place['name']}의 위치를 찾았습니다.",
+                        'location': location
+                    })
+            except Exception as e:
+                print(f"Error searching location: {e}")
+        
+        return jsonify({
+            'type': 'text',
+            'content': bot_response
+        })
+        
+    except Exception as e:
+        print(f"Error in chat endpoint: {e}")
+        return jsonify({
+            'type': 'text',
+            'content': '죄송합니다. 오류가 발생했습니다. 다시 시도해주세요.'
+        }), 500
+
+def is_valid_youtube_url(url):
+    """YouTube URL이 유효한지 확인"""
+    youtube_regex = (
+        r'(https?://)?(www\.)?'
+        r'(youtube|youtu|youtube-nocookie)\.(com|be)/'
+        r'(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})')
+    return bool(re.match(youtube_regex, url))
+
+def download_youtube_video(url):
+    """YouTube 영상 다운로드"""
+    max_retries = 3
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"\n=== YouTube 다운로드 시도 {attempt + 1}/{max_retries} ===")
+            print(f"URL: {url}")
+            
+            # 업로드 폴더 확인
+            if not os.path.exists(UPLOAD_FOLDER):
+                print(f"업로드 폴더 생성: {UPLOAD_FOLDER}")
+                os.makedirs(UPLOAD_FOLDER)
+            
+            # 파일명 생성
+            timestamp = int(time.time())
+            filename = f"youtube_{timestamp}.mp4"
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            print(f"저장 경로: {filepath}")
+            
+            # yt-dlp 옵션 설정
+            ydl_opts = {
+                'format': 'best[height<=720]',  # 720p 이하의 최상의 품질
+                'outtmpl': filepath,
+                'quiet': False,
+                'no_warnings': False,
+                'extract_flat': False,
+                'noplaylist': True,
+                'verbose': True
+            }
+            
+            print("영상 정보 다운로드 중...")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # 영상 정보 가져오기
+                info = ydl.extract_info(url, download=False)
+                title = info.get('title', '')
+                duration = info.get('duration', 0)
+                
+                print(f"영상 제목: {title}")
+                print(f"영상 길이: {duration}초")
+                
+                # 영상 다운로드
+                print("다운로드 시작...")
+                ydl.download([url])
+            
+            # 파일 존재 확인
+            if not os.path.exists(filepath):
+                raise Exception("다운로드된 파일을 찾을 수 없습니다.")
+            
+            print("다운로드 완료")
+            return {
+                'filepath': filepath,
+                'title': title,
+                'duration': duration
+            }
+            
+        except Exception as e:
+            print(f"시도 {attempt + 1} 실패: {str(e)}")
+            if attempt < max_retries - 1:
+                print(f"{retry_delay}초 후 재시도...")
+                time.sleep(retry_delay)
+            else:
+                print("최대 재시도 횟수 초과")
+                raise Exception(f"YouTube 다운로드 실패: {str(e)}")
+
+@app.route('/process-youtube', methods=['POST'])
+def process_youtube():
+    try:
+        print("\n=== YouTube 처리 요청 시작 ===")
+        data = request.get_json()
+        if not data:
+            print("요청 데이터가 없습니다")
+            return jsonify({'error': '요청 데이터가 없습니다'}), 400
+
+        url = data.get('url')
+        query = data.get('query', '')
+        mode = data.get('mode', 'normal')
+        
+        print(f"받은 URL: {url}")
+        print(f"검색어: {query}")
+        print(f"모드: {mode}")
+        
+        if not url:
+            print("URL이 제공되지 않음")
+            return jsonify({'error': 'YouTube URL이 필요합니다'}), 400
+            
+        if not is_valid_youtube_url(url):
+            print(f"유효하지 않은 YouTube URL: {url}")
+            return jsonify({'error': '유효하지 않은 YouTube URL입니다'}), 400
+        
+        print("YouTube 영상 다운로드 시작")
+        try:
+            # YouTube 영상 다운로드
+            video_info = download_youtube_video(url)
+            print(f"다운로드 완료: {video_info['filepath']}")
+            
+            try:
+                print("비디오 처리 시작")
+                # 비디오 처리
+                timeline_results = process_video(video_info['filepath'], query, mode)
+                print(f"처리된 타임라인 결과: {len(timeline_results)}개 항목")
+                
+                response_data = {
+                    'type': 'video',
+                    'file_url': f'/uploads/{os.path.basename(video_info["filepath"])}',
+                    'timeline': timeline_results,
+                    'title': video_info['title'],
+                    'duration': video_info['duration']
+                }
+                print("응답 데이터 준비 완료")
+                return jsonify(response_data)
+                
+            finally:
+                # 처리 완료 후 파일 삭제
+                if os.path.exists(video_info['filepath']):
+                    print(f"임시 파일 삭제: {video_info['filepath']}")
+                    os.remove(video_info['filepath'])
+                    
+        except Exception as e:
+            print(f"비디오 처리 중 오류 발생: {str(e)}")
+            import traceback
+            print("상세 오류 정보:")
+            print(traceback.format_exc())
+            return jsonify({'error': f'비디오 처리 중 오류가 발생했습니다: {str(e)}'}), 500
+                
+    except Exception as e:
+        print(f"전체 처리 중 오류 발생: {str(e)}")
+        import traceback
+        print("상세 오류 정보:")
+        print(traceback.format_exc())
+        return jsonify({'error': f'처리 중 오류가 발생했습니다: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(port=5001, debug=True)
