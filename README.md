@@ -32,7 +32,7 @@ FindIt은 이미지와 비디오에서 텍스트를 검색하고, YouTube 영상
 
 - Frontend: React, TypeScript
 - Backend: Python, Flask
-- OCR: EasyOCR, PaddleOCR, Tesseract
+- OCR: EasyOCR, PaddleOCR, Tesseract, Google Vision
 - AI: OpenAI GPT
 
 ## 설치 및 실행 방법
