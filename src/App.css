@@ -619,4 +619,38 @@ h1 {
 .search-button.smart-search .file:before,
 .search-button.smart-search .file:after {
   background-color: var(--smart-primary);
+}
+
+.summarize-button {
+  background-color: #4CAF50;
+  margin-left: 10px;
+}
+
+.summarize-button:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+}
+
+.summary-container {
+  margin-top: 20px;
+  padding: 20px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.summary-container h3 {
+  margin: 0 0 15px 0;
+  color: #333;
+  font-size: 1.2em;
+}
+
+.summary-content {
+  white-space: pre-line;
+  line-height: 1.6;
+}
+
+.summary-content p {
+  margin: 8px 0;
+  color: #444;
 } 

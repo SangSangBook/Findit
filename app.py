@@ -1057,5 +1057,67 @@ def process_youtube():
         print(traceback.format_exc())
         return jsonify({'error': f'처리 중 오류가 발생했습니다: {str(e)}'}), 500
 
+@app.route('/summarize', methods=['POST'])
+def summarize_document():
+    try:
+        if 'image' not in request.files:
+            return jsonify({'error': '이미지 파일이 필요합니다'}), 400
+
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({'error': '선택된 파일이 없습니다'}), 400
+
+        if not allowed_file(file.filename):
+            return jsonify({'error': '지원하지 않는 파일 형식입니다'}), 400
+
+        filename = f"{int(time.time())}_{secure_filename(file.filename)}"
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+        file.save(filepath)
+
+        try:
+            # OCR로 텍스트 추출
+            ocr_text, _ = extract_text_with_vision(filepath)
+            
+            if not ocr_text:
+                return jsonify({'error': '텍스트를 추출할 수 없습니다'}), 400
+
+            # OpenAI를 사용하여 텍스트 요약
+            prompt = f"""
+            다음은 계약서에서 추출한 텍스트입니다. 중요한 내용을 요약해주세요:
+            {ocr_text}
+            
+            다음 형식으로 요약해주세요:
+            1. 계약 당사자
+            2. 주요 계약 내용
+            3. 중요 날짜
+            4. 특이사항
+            """
+
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "당신은 계약서 분석 전문가입니다. 계약서의 중요한 내용을 명확하고 구조화된 방식으로 요약해주세요."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=500,
+                temperature=0.3
+            )
+
+            summary = response.choices[0].message.content
+
+            return jsonify({
+                'summary': summary,
+                'original_text': ocr_text
+            })
+
+        finally:
+            # 임시 파일 삭제
+            if os.path.exists(filepath):
+                os.remove(filepath)
+
+    except Exception as e:
+        print(f"요약 중 오류 발생: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     app.run(port=5001, debug=True)
