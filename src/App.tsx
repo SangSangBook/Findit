@@ -32,6 +32,8 @@ interface ApiResponse {
   ocr_text?: string;
   file_url?: string;
   timeline?: TimelineItem[];
+  summary?: string;
+  original_text?: string;
 }
 
 const App: React.FC = () => {
@@ -47,6 +49,8 @@ const App: React.FC = () => {
   const [mediaUrl, setMediaUrl] = useState<string>('');
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [searchMode, setSearchMode] = useState<'normal' | 'smart'>('normal');
+  const [summary, setSummary] = useState<string | null>(null);
+  const [isSummarizing, setIsSummarizing] = useState(false);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -231,6 +235,40 @@ const App: React.FC = () => {
     setTimeline([]); // 타임라인 초기화
   };
 
+  const handleSummarize = async () => {
+    if (!selectedMedia || selectedMedia.type !== 'image') {
+      setError('이미지 파일만 요약할 수 있습니다');
+      return;
+    }
+
+    setIsSummarizing(true);
+    setError(null);
+    setSummary(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('image', selectedMedia.file);
+
+      const response = await fetch('http://localhost:5001/summarize', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || '요약 중 오류가 발생했습니다');
+      }
+
+      const data = await response.json();
+      setSummary(data.summary);
+    } catch (error) {
+      console.error('요약 오류:', error);
+      setError(error instanceof Error ? error.message : '요약 중 오류가 발생했습니다');
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
+
   return (
     <div className="App">
       
@@ -291,6 +329,28 @@ const App: React.FC = () => {
                 </svg>
               </div>
             </button>
+            <button 
+              onClick={handleSummarize}
+              className="search-button summarize-button"
+              disabled={!selectedMedia || selectedMedia.type !== 'image' || isSummarizing}
+            >
+              <div className="left-side">
+                <div className="magnifying-glass"></div>
+                <div className="files-container">
+                  <div className="file"></div>
+                  <div className="file"></div>
+                  <div className="file"></div>
+                  <div className="file"></div>
+                  <div className="file"></div>
+                </div>
+              </div>
+              <div className="right-side">
+                <div className="new">{isSummarizing ? '요약 중...' : '요약'}</div>
+                <svg className="arrow" xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 451.846 451.847">
+                  <path d="M345.441 248.292L151.154 442.573c-12.359 12.365-32.397 12.365-44.75 0-12.354-12.354-12.354-32.391 0-44.744L278.318 225.92 106.409 54.017c-12.354-12.359-12.354-32.394 0-44.748 12.354-12.359 32.391-12.359 44.75 0l194.287 194.284c6.177 6.18 9.262 14.271 9.262 22.366 0 8.099-3.091 16.196-9.267 22.373z" data-original="#000000" className="active-path" data-old_color="#000000" fill="#cfcfcf"/>
+                </svg>
+              </div>
+            </button>
           </div>
         </div>
       </div>
@@ -346,19 +406,19 @@ const App: React.FC = () => {
                 const scaleY = rect.height / img.naturalHeight;
                 
                 const bbox = obj.bbox;
-                // 첫 글자의 좌표만 사용
-                const relativeX = bbox.x1 * scaleX;
-                const relativeY = bbox.y1 * scaleY;
+                const centerX = ((bbox.x1 + bbox.x2) / 2) * scaleX;
+                const centerY = ((bbox.y1 + bbox.y2) / 2) * scaleY;
+                const radius = Math.max((bbox.x2 - bbox.x1), (bbox.y2 - bbox.y1)) * scaleX / 2;
                 
                 return (
                   <div
                     key={index}
                     style={{
                       position: 'absolute',
-                      left: `${relativeX - 10}px`,
-                      top: `${relativeY - 10}px`,
-                      width: '20px',
-                      height: '20px',
+                      left: `${centerX - radius}px`,
+                      top: `${centerY - radius}px`,
+                      width: `${radius * 2}px`,
+                      height: `${radius * 2}px`,
                       border: `2px solid ${obj.color || (searchMode === 'smart' ? 'yellow' : 'red')}`,
                       borderRadius: '50%',
                       pointerEvents: 'none',
@@ -370,6 +430,17 @@ const App: React.FC = () => {
             </div>
           )}
           
+          {summary && (
+            <div className="summary-container">
+              <h3>계약서 요약</h3>
+              <div className="summary-content">
+                {summary.split('\n').map((line, index) => (
+                  <p key={index}>{line}</p>
+                ))}
+              </div>
+            </div>
+          )}
+
           {timeline.length > 0 && (
             <div className="timeline-container">
               <h3>타임라인</h3>
