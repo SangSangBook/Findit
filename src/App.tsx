@@ -43,6 +43,9 @@ const App: React.FC = () => {
   const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ocrResults, setOcrResults] = useState<DetectedObject[]>([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [noResults, setNoResults] = useState(false);
   const imageRef = useRef<HTMLImageElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [mediaType, setMediaType] = useState<'image' | 'video'>('image');
@@ -51,11 +54,26 @@ const App: React.FC = () => {
   const [searchMode, setSearchMode] = useState<'normal' | 'smart'>('normal');
   const [summary, setSummary] = useState<string | null>(null);
   const [isSummarizing, setIsSummarizing] = useState(false);
+  const [isSearchExpanded, setIsSearchExpanded] = useState(true);
+  const [searchPosition, setSearchPosition] = useState({ x: window.innerWidth - 450, y: 100 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const searchRef = useRef<HTMLDivElement>(null);
+  const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [isProcessingYoutube, setIsProcessingYoutube] = useState(false);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
+      console.log('=== 파일 업로드 시작 ===');
+      console.log('파일 정보:', {
+        name: file.name,
+        type: file.type,
+        size: file.size
+      });
+
       setIsProcessing(true);
+      setIsAnalyzing(true);
       setError(null);
       const url = URL.createObjectURL(file);
       const type = file.type.startsWith('video/') ? 'video' : 'image';
@@ -68,17 +86,21 @@ const App: React.FC = () => {
       };
 
       try {
-        const formData = new FormData();
-        formData.append(type === 'video' ? 'video' : 'image', file);
-
-        console.log('Uploading file:', file.name, 'Type:', type);
-        
         // 서버 URL 확인
         const serverUrl = 'http://localhost:5001';
         const endpoint = type === 'video' ? 'upload' : 'upload-image';
         const fullUrl = `${serverUrl}/${endpoint}`;
-        
-        console.log('Uploading to:', fullUrl);
+
+        const formData = new FormData();
+        formData.append(type === 'video' ? 'video' : 'image', file);
+        formData.append('analyze', 'true');
+
+        console.log('=== OCR 분석 요청 시작 ===');
+        console.log('요청 URL:', fullUrl);
+        console.log('요청 데이터:', {
+          type: type,
+          analyze: true
+        });
         
         const response = await fetch(fullUrl, {
           method: 'POST',
@@ -88,16 +110,46 @@ const App: React.FC = () => {
           },
         });
 
-        console.log('Server response status:', response.status);
+        console.log('서버 응답 상태:', response.status);
         
         if (!response.ok) {
           const errorData = await response.json();
-          console.error('Upload error:', errorData);
+          console.error('업로드 오류:', errorData);
           throw new Error(errorData.error || '파일 업로드에 실패했습니다');
         }
 
         const data = await response.json();
-        console.log('Upload successful:', data);
+        console.log('=== 서버 응답 데이터 ===');
+        console.log('업로드 성공:', data);
+
+        // OCR 분석 시작
+        const ocrFormData = new FormData();
+        ocrFormData.append('image', file);
+        ocrFormData.append('query', '');
+        ocrFormData.append('mode', 'normal');
+
+        console.log('=== OCR 분석 요청 ===');
+        const ocrResponse = await fetch('http://localhost:5001/analyze-image', {
+          method: 'POST',
+          body: ocrFormData,
+          headers: {
+            'Accept': 'application/json',
+          },
+        });
+
+        if (!ocrResponse.ok) {
+          const errorData = await ocrResponse.json();
+          console.error('OCR 분석 오류:', errorData);
+          throw new Error(errorData.error || 'OCR 분석에 실패했습니다');
+        }
+
+        const ocrData = await ocrResponse.json();
+        console.log('OCR 결과:', ocrData.objects ? `${ocrData.objects.length}개의 텍스트 감지됨` : '텍스트 없음');
+
+        if (ocrData.objects) {
+          setOcrResults(ocrData.objects);
+          console.log('OCR 결과 저장 완료');
+        }
         
         // 서버 응답이 성공적일 때만 미디어 아이템 추가 및 선택
         setMediaItems(prev => [...prev, newMediaItem]);
@@ -109,6 +161,7 @@ const App: React.FC = () => {
 
         // 비디오인 경우 자막 추출 시작
         if (type === 'video' && data.file_url) {
+          console.log('=== 비디오 자막 추출 시작 ===');
           const filename = data.file_url.split('/').pop();
           if (filename) {
             try {
@@ -121,53 +174,67 @@ const App: React.FC = () => {
 
               if (subtitleResponse.ok) {
                 const subtitleData = await subtitleResponse.json();
-                console.log('Subtitles extracted:', subtitleData);
-                // 자막 데이터 처리 (필요한 경우)
+                console.log('자막 추출 성공:', subtitleData);
               }
             } catch (error) {
-              console.error('Subtitle extraction error:', error);
-              // 자막 추출 실패는 무시 (비디오 재생에는 영향 없음)
+              console.error('자막 추출 오류:', error);
             }
           }
         }
       } catch (error) {
-        console.error('Upload error:', error);
+        console.error('=== 오류 발생 ===');
+        console.error('오류 상세:', error);
         setError(error instanceof Error ? error.message : '업로드 중 오류가 발생했습니다');
       } finally {
+        console.log('=== 처리 완료 ===');
         setIsProcessing(false);
+        setIsAnalyzing(false);
       }
     }
   };
 
-  const drawBoundingBoxes = (canvas: HTMLCanvasElement, objects: any[], mode: string) => {
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+  const handleRefreshOcr = async () => {
+    if (!selectedMedia) return;
 
-    objects.forEach(obj => {
-      const { bbox, color } = obj;
-      const { x1, y1, x2, y2 } = bbox;
-      
-      // 색상 설정
-      ctx.strokeStyle = color || (mode === 'smart' ? 'yellow' : 'red');
-      ctx.lineWidth = 2;
-      
-      // 동그라미 그리기
-      const centerX = (x1 + x2) / 2;
-      const centerY = (y1 + y2) / 2;
-      const radius = Math.max((x2 - x1), (y2 - y1)) / 2;
-      
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
-      ctx.stroke();
-    });
+    setIsAnalyzing(true);
+    try {
+      const formData = new FormData();
+      formData.append(selectedMedia.type === 'video' ? 'video' : 'image', selectedMedia.file);
+
+      const response = await fetch('http://localhost:5001/analyze-image', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('OCR 분석에 실패했습니다');
+      }
+
+      const data = await response.json();
+      if (data.objects) {
+        setOcrResults(data.objects);
+        setDetectedObjects([]); // 검색 결과 초기화
+      }
+    } catch (error) {
+      console.error('OCR refresh error:', error);
+      setError(error instanceof Error ? error.message : 'OCR 분석 중 오류가 발생했습니다');
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   const handleSearch = async (mode: 'normal' | 'smart') => {
     if (!searchTerm || !selectedMedia) {
       setDetectedObjects([]);
       setTimeline([]);
+      setNoResults(false);
       return;
     }
+
+    console.log('=== 검색 시작 ===');
+    console.log('검색어:', searchTerm);
+    console.log('검색 모드:', mode);
+    console.log('저장된 OCR 결과:', ocrResults);
 
     try {
       const formData = new FormData();
@@ -188,24 +255,24 @@ const App: React.FC = () => {
       const data: ApiResponse = await response.json();
       
       if (data.type === 'image') {
-        setDetectedObjects(data.objects || []);
+        const results = data.objects || [];
+        setDetectedObjects(results);
+        setNoResults(results.length === 0);
         setTimeline([]);
         setMediaType('image');
         setMediaUrl(selectedMedia.url);
-        const canvas = document.getElementById('canvas') as HTMLCanvasElement;
-        if (canvas) {
-          drawBoundingBoxes(canvas, data.objects || [], mode);
-        }
       } else {
+        const results = data.timeline || [];
         setDetectedObjects([]);
-        setTimeline(data.timeline || []);
+        setTimeline(results);
+        setNoResults(results.length === 0);
         setMediaType('video');
-        // 서버에서 받은 비디오 URL 사용
         setMediaUrl(`http://localhost:5001${data.file_url}`);
       }
     } catch (error) {
-      console.error('검색 오류:', error);
+      console.error('검색 중 오류 발생:', error);
       setError(error instanceof Error ? error.message : '검색 중 오류가 발생했습니다');
+      setNoResults(false);
     }
   };
 
@@ -216,6 +283,8 @@ const App: React.FC = () => {
     // 검색어를 완전히 지웠을 때만 하이라이트 제거
     if (newSearchTerm === '') {
       setDetectedObjects([]);
+      setTimeline([]);
+      setNoResults(false);
     }
   };
 
@@ -269,93 +338,108 @@ const App: React.FC = () => {
     }
   };
 
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.target instanceof HTMLElement && e.target.closest('.drag-handle')) {
+      setIsDragging(true);
+      const rect = searchRef.current?.getBoundingClientRect();
+      if (rect) {
+        setDragOffset({
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top
+        });
+      }
+    }
+  };
+
+  const handleMouseMove = (e: MouseEvent) => {
+    if (isDragging && searchRef.current) {
+      const x = e.clientX - dragOffset.x;
+      const y = e.clientY - dragOffset.y;
+      setSearchPosition({ x, y });
+    }
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  useEffect(() => {
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, dragOffset]);
+
+  const handleYoutubeProcess = async () => {
+    if (!youtubeUrl.trim()) {
+      alert('YouTube URL을 입력해주세요.');
+      return;
+    }
+
+    setIsProcessingYoutube(true);
+    try {
+      const response = await fetch('http://localhost:5001/process-youtube', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          url: youtubeUrl,
+          query: '',
+          mode: 'normal'
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      // 비디오 아이템 생성
+      const newMediaItem: MediaItem = {
+        id: Date.now().toString(),
+        type: 'video',
+        url: data.file_url,
+        file: new File([], 'youtube-video.mp4')
+      };
+
+      setMediaItems(prev => [...prev, newMediaItem]);
+      setSelectedMedia(newMediaItem);
+      setMediaType('video');
+      setMediaUrl(data.file_url);
+      setYoutubeUrl('');
+
+      // 타임라인 처리
+      if (data.timeline && data.timeline.length > 0) {
+        setTimeline(data.timeline);
+      }
+
+      alert('영상 처리가 완료되었습니다.');
+    } catch (error) {
+      console.error('Error:', error);
+      alert(`처리 중 오류가 발생했습니다: ${error instanceof Error ? error.message : '알 수 없는 오류'}`);
+    } finally {
+      setIsProcessingYoutube(false);
+    }
+  };
+
   return (
     <div className="App">
-      
-      <div className="search-section">
-        <div className="search-container">
-          <input
-            type="text"
-            placeholder="검색어를 입력하세요..."
-            value={searchTerm}
-            onChange={handleSearchInputChange}
-            onKeyPress={(e) => {
-              if (e.key === 'Enter') {
-                handleSearch('normal');
-              }
-            }}
-            className="search-input"
-          />
-          <div className="search-buttons">
-            <button 
-              onClick={() => handleSearch('normal')}
-              className="search-button"
-            >
-              <div className="left-side">
-                <div className="magnifying-glass"></div>
-                <div className="files-container">
-                  <div className="file"></div>
-                  <div className="file"></div>
-                  <div className="file"></div>
-                  <div className="file"></div>
-                  <div className="file"></div>
-                </div>
-              </div>
-              <div className="right-side">
-                <div className="new">검색</div>
-                <svg className="arrow" xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 451.846 451.847">
-                  <path d="M345.441 248.292L151.154 442.573c-12.359 12.365-32.397 12.365-44.75 0-12.354-12.354-12.354-32.391 0-44.744L278.318 225.92 106.409 54.017c-12.354-12.359-12.354-32.394 0-44.748 12.354-12.359 32.391-12.359 44.75 0l194.287 194.284c6.177 6.18 9.262 14.271 9.262 22.366 0 8.099-3.091 16.196-9.267 22.373z" data-original="#000000" className="active-path" data-old_color="#000000" fill="#cfcfcf"/>
-                </svg>
-              </div>
-            </button>
-            <button 
-              onClick={() => handleSearch('smart')}
-              className="search-button smart-search"
-            >
-              <div className="left-side">
-                <div className="magnifying-glass"></div>
-                <div className="files-container">
-                  <div className="file"></div>
-                  <div className="file"></div>
-                  <div className="file"></div>
-                  <div className="file"></div>
-                  <div className="file"></div>
-                </div>
-              </div>
-              <div className="right-side">
-                <div className="new">스마트 검색</div>
-                <svg className="arrow" xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 451.846 451.847">
-                  <path d="M345.441 248.292L151.154 442.573c-12.359 12.365-32.397 12.365-44.75 0-12.354-12.354-12.354-32.391 0-44.744L278.318 225.92 106.409 54.017c-12.354-12.359-12.354-32.394 0-44.748 12.354-12.359 32.391-12.359 44.75 0l194.287 194.284c6.177 6.18 9.262 14.271 9.262 22.366 0 8.099-3.091 16.196-9.267 22.373z" data-original="#000000" className="active-path" data-old_color="#000000" fill="#cfcfcf"/>
-                </svg>
-              </div>
-            </button>
-            <button 
-              onClick={handleSummarize}
-              className="search-button summarize-button"
-              disabled={!selectedMedia || selectedMedia.type !== 'image' || isSummarizing}
-            >
-              <div className="left-side">
-                <div className="magnifying-glass"></div>
-                <div className="files-container">
-                  <div className="file"></div>
-                  <div className="file"></div>
-                  <div className="file"></div>
-                  <div className="file"></div>
-                  <div className="file"></div>
-                </div>
-              </div>
-              <div className="right-side">
-                <div className="new">{isSummarizing ? '요약 중...' : '요약'}</div>
-                <svg className="arrow" xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 451.846 451.847">
-                  <path d="M345.441 248.292L151.154 442.573c-12.359 12.365-32.397 12.365-44.75 0-12.354-12.354-12.354-32.391 0-44.744L278.318 225.92 106.409 54.017c-12.354-12.359-12.354-32.394 0-44.748 12.354-12.359 32.391-12.359 44.75 0l194.287 194.284c6.177 6.18 9.262 14.271 9.262 22.366 0 8.099-3.091 16.196-9.267 22.373z" data-original="#000000" className="active-path" data-old_color="#000000" fill="#cfcfcf"/>
-                </svg>
-              </div>
-            </button>
-          </div>
-        </div>
+      <div className="app-header">
       </div>
-      
+
       <div className="upload-section">
+        <h3>파일 업로드</h3>
         <div className="upload-options">
           <div className="upload-option">
             <h3>이미지 업로드</h3>
@@ -380,6 +464,92 @@ const App: React.FC = () => {
         {error && <p className="error">{error}</p>}
       </div>
 
+      <div className="youtube-input-container">
+        <h3>YouTube URL</h3>
+        <input
+          type="text"
+          value={youtubeUrl}
+          onChange={(e) => setYoutubeUrl(e.target.value)}
+          placeholder="YouTube URL을 입력하세요"
+          className="youtube-input"
+        />
+        <button 
+          className="youtube-button"
+          onClick={handleYoutubeProcess}
+          disabled={isProcessingYoutube}
+        >
+          <i className="fab fa-youtube"></i>
+          {isProcessingYoutube ? '처리 중...' : '처리하기'}
+        </button>
+      </div>
+
+      <div 
+        ref={searchRef}
+        className={`search-section ${isSearchExpanded ? '' : 'collapsed'}`}
+        style={{ 
+          left: `${searchPosition.x}px`,
+          top: `${searchPosition.y}px`
+        }}
+        onMouseDown={handleMouseDown}
+      >
+        <div className="drag-handle">검색 패널</div>
+        <button 
+          className="toggle-button" 
+          onClick={() => setIsSearchExpanded(!isSearchExpanded)}
+          aria-label={isSearchExpanded ? '검색 패널 접기' : '검색 패널 펼치기'}
+        >
+          {isSearchExpanded ? '◀' : '▶'}
+        </button>
+        <div className="search-container">
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={handleSearchInputChange}
+            placeholder="검색어를 입력하세요"
+            className="search-input"
+          />
+          <div className="search-buttons">
+            <button
+              className="search-button"
+              onClick={() => handleSearch('normal')}
+            >
+              <div className="left-side">
+                <div className="magnifying-glass"></div>
+              </div>
+              <div className="right-side">
+                <div className="title">일반 검색</div>
+                <div className="description">이미지에서 텍스트를 찾습니다</div>
+              </div>
+            </button>
+            <button
+              className="search-button smart-search"
+              onClick={() => handleSearch('smart')}
+            >
+              <div className="left-side">
+                <div className="magnifying-glass"></div>
+              </div>
+              <div className="right-side">
+                <div className="title">스마트 검색</div>
+                <div className="description">AI가 의미를 이해하고 검색합니다</div>
+              </div>
+            </button>
+            <button
+              className="search-button summarize-button"
+              onClick={handleSummarize}
+              disabled={!selectedMedia || selectedMedia.type !== 'image' || isSummarizing}
+            >
+              <div className="left-side">
+                <div className="magnifying-glass"></div>
+              </div>
+              <div className="right-side">
+                <div className="title">{isSummarizing ? '요약 중...' : '요약'}</div>
+                <div className="description">이미지의 내용을 요약합니다</div>
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+
       {selectedMedia && (
         <div className="selected-media">
           {selectedMedia.type === 'video' ? (
@@ -397,6 +567,14 @@ const App: React.FC = () => {
                 ref={imageRef}
                 style={{ maxWidth: '100%', maxHeight: '400px' }}
               />
+              {isAnalyzing && (
+                <div className="analyzing-overlay">
+                  <div className="analyzing-content">
+                    <i className="fas fa-spinner fa-spin"></i>
+                    <span>이미지 분석 중...</span>
+                  </div>
+                </div>
+              )}
               {detectedObjects.map((obj, index) => {
                 const img = imageRef.current;
                 if (!img) return null;
@@ -427,9 +605,26 @@ const App: React.FC = () => {
                   />
                 );
               })}
+              {!isAnalyzing && (
+                <button 
+                  className="refresh-button"
+                  onClick={handleRefreshOcr}
+                  title="OCR 새로고침"
+                >
+                  <i className="fas fa-sync-alt"></i>
+                </button>
+              )}
             </div>
           )}
           
+          {noResults && (
+            <div className="no-results-message">
+              <i className="fas fa-search"></i>
+              <p>검색 결과가 없습니다.</p>
+              <p className="sub-text">다른 검색어를 입력하거나 OCR을 새로고침해보세요.</p>
+            </div>
+          )}
+
           {summary && (
             <div className="summary-container">
               <h3>계약서 요약</h3>
