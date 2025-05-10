@@ -40,6 +40,4 @@ ENV/
 .DS_Store
 Thumbs.db
 
-GOOGLE_CLOUD_VISION_API_KEY=AIzaSyBVZObRlvKtAhqAnxX8fWE2JiB_rsTM5zQ 
-
 node_modules/
