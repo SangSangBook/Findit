@@ -43,6 +43,9 @@ related_words_cache = {}
 client = OpenAI()  # 환경 변수에서 자동으로 API 키를 가져옴
 gmaps = googlemaps.Client(key=os.getenv('GOOGLE_CLOUD_VISION_API_KEY'))
 
+# OCR 결과를 저장할 전역 변수
+ocr_results_cache = {}
+
 def get_related_words(query, ocr_texts):
     """OCR에서 추출된 텍스트 중에서 연관어를 찾습니다."""
     if query in related_words_cache:
@@ -789,82 +792,152 @@ def extract_subtitles_endpoint(filename):
 @app.route('/upload-image', methods=['POST'])
 def upload_image():
     try:
-        if 'image' not in request.files:
-            return jsonify({'error': 'No image file provided'}), 400
+        if 'images[]' not in request.files:
+            return jsonify({'error': '이미지 파일이 필요합니다'}), 400
         
-        file = request.files['image']
-        if file.filename == '':
-            return jsonify({'error': 'No selected file'}), 400
+        files = request.files.getlist('images[]')
+        if not files:
+            return jsonify({'error': '선택된 파일이 없습니다'}), 400
         
-        if not allowed_file(file.filename):
-            return jsonify({'error': 'Invalid file format. Allowed formats: png, jpg, jpeg'}), 400
+        uploaded_files = []
+        combined_ocr_text = ""
+        combined_coordinates = {}
         
-        filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secure_filename(file.filename)}"
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        file.save(filepath)
+        for file in files:
+            if file.filename == '':
+                continue
+                
+            if not allowed_file(file.filename):
+                return jsonify({'error': f'지원하지 않는 파일 형식입니다: {file.filename}'}), 400
+            
+            filename = f"{int(time.time())}_{secure_filename(file.filename)}"
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            file.save(filepath)
+            
+            try:
+                # OCR로 텍스트 추출
+                ocr_text, coordinates = extract_text_with_vision(filepath)
+                
+                if ocr_text:
+                    # 각 이미지의 OCR 결과를 저장
+                    image_id = str(len(uploaded_files))
+                    ocr_results_cache[image_id] = {
+                        'text': ocr_text,
+                        'coordinates': coordinates,
+                        'file_url': f'/uploads/{filename}'
+                    }
+                    
+                    # 전체 OCR 텍스트와 좌표 정보 결합
+                    combined_ocr_text += f"\n--- 이미지 {len(uploaded_files) + 1} ---\n{ocr_text}"
+                    combined_coordinates.update(coordinates)
+                
+                uploaded_files.append({
+                    'filename': filename,
+                    'file_url': f'/uploads/{filename}'
+                })
+                
+            finally:
+                # 임시 파일 삭제
+                if os.path.exists(filepath):
+                    os.remove(filepath)
         
-        # 이미지는 즉시 URL만 반환
+        if not uploaded_files:
+            return jsonify({'error': '처리된 파일이 없습니다'}), 400
+        
+        # 전체 OCR 결과 저장
+        session_id = str(int(time.time()))
+        ocr_results_cache[session_id] = {
+            'text': combined_ocr_text,
+            'coordinates': combined_coordinates,
+            'images': uploaded_files
+        }
+        
         return jsonify({
-            'message': 'Image uploaded successfully',
-            'file_url': f'/uploads/{filename}'
+            'message': '이미지 업로드 성공',
+            'session_id': session_id,
+            'files': uploaded_files
         })
+        
     except Exception as e:
-        print(f"Error in upload_image: {e}")
+        print(f"이미지 업로드 중 오류 발생: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# 이미지 분석 엔드포인트 추가
+# 이미지 분석 엔드포인트 수정
 @app.route('/analyze-image', methods=['POST'])
 def analyze_image_endpoint():
     try:
-        if 'image' not in request.files or 'query' not in request.form:
-            return jsonify({'error': '이미지와 쿼리가 필요합니다'}), 400
-
-        file = request.files['image']
-        query = request.form['query']
-        mode = request.form.get('mode', 'normal')  # 'normal' 또는 'smart'
-
-        if file.filename == '':
-            return jsonify({'error': '선택된 파일이 없습니다'}), 400
-
-        allowed_extensions = ('.png', '.jpg', '.jpeg', '.mp4', '.avi', '.mov', '.wmv')
-        if not file or not file.filename.lower().endswith(allowed_extensions):
-            return jsonify({'error': '지원하지 않는 파일 형식입니다'}), 400
-
-        filename = f"{int(time.time())}_{secure_filename(file.filename)}"
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        file.save(filepath)
-
-        try:
-            # 이미지 파일 처리
-            if file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-                detected_objects = analyze_image(filepath, query, mode)
-                
-                return jsonify({
-                    'objects': detected_objects,
-                    'type': 'image',
-                    'mode': mode,
-                    'file_url': f'/uploads/{filename}'
-                })
+        session_id = request.form.get('session_id')
+        query = request.form.get('query', '')
+        mode = request.form.get('mode', 'normal')
+        
+        if not session_id or session_id not in ocr_results_cache:
+            return jsonify({'error': '유효하지 않은 세션 ID입니다'}), 400
+        
+        ocr_data = ocr_results_cache[session_id]
+        detected_objects = []
+        
+        print(f"=== 이미지 분석 시작 ===")
+        print(f"검색어: {query}")
+        print(f"모드: {mode}")
+        print(f"OCR 데이터: {ocr_data['coordinates']}")
+        
+        if mode == 'smart':
+            # OCR에서 추출된 텍스트를 기반으로 연관어를 찾음
+            ocr_texts = list(ocr_data['coordinates'].keys())
+            related_words = get_related_words(query, ocr_texts)
             
-            # 비디오 파일 처리
-            else:
-                timeline_results = process_video(filepath, query, mode)
-                return jsonify({
-                    'type': 'video',
-                    'file_url': f'/uploads/{filename}',
-                    'timeline': timeline_results
-                })
-
-        finally:
-            # 이미지 파일인 경우에만 삭제 (비디오는 클라이언트에서 재생해야 하므로 유지)
-            if file.filename.lower().endswith(('.png', '.jpg', '.jpeg')) and os.path.exists(filepath):
-                os.remove(filepath)
-
+            # 연관어를 단어별로 분리하여 저장
+            related_words_list = []
+            for word in related_words:
+                words = word.split(',')
+                for w in words:
+                    w = re.sub(r'[0-9\W]+', '', w.strip())
+                    if w and len(w) > 1:
+                        related_words_list.append(w)
+            
+            print(f"연관어 목록: {related_words_list}")
+            
+            # 연관어 검색
+            for text, data in ocr_data['coordinates'].items():
+                for word in related_words_list:
+                    if word.lower() in text.lower():
+                        print(f"매칭 발견: '{text}' (연관어: '{word}')")
+                        detected_objects.append({
+                            'text': text,
+                            'bbox': data['bbox'],
+                            'color': 'yellow'
+                        })
+                        break
+        else:
+            # 일반 검색
+            query_lower = query.lower().strip()
+            for text, data in ocr_data['coordinates'].items():
+                text_lower = text.lower().strip()
+                if (text_lower == query_lower or
+                    text_lower.startswith(query_lower) or
+                    text_lower.endswith(query_lower)):
+                    print(f"매칭 발견: '{text}' (검색어: '{query}')")
+                    print(f"bbox 정보: {data['bbox']}")
+                    detected_objects.append({
+                        'text': text,
+                        'bbox': data['bbox'],
+                        'color': 'red'
+                    })
+        
+        print(f"검색 결과: {len(detected_objects)}개의 매칭된 텍스트 발견")
+        for obj in detected_objects:
+            print(f"매칭된 텍스트: {obj['text']}, bbox: {obj['bbox']}")
+        
+        return jsonify({
+            'objects': detected_objects,
+            'type': 'image',
+            'mode': mode,
+            'session_id': session_id,
+            'files': ocr_data['images']
+        })
+        
     except Exception as e:
-        print(f"오류 발생: {str(e)}")
-        # 에러 발생 시 파일 정리
-        if os.path.exists(filepath):
-            os.remove(filepath)
+        print(f"이미지 분석 중 오류 발생: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/uploads/<filename>')
@@ -1057,64 +1130,86 @@ def process_youtube():
         print(traceback.format_exc())
         return jsonify({'error': f'처리 중 오류가 발생했습니다: {str(e)}'}), 500
 
+def getInfoFromTextWithOpenAI(text: str) -> str | None:
+    """OpenAI API를 사용하여 주어진 텍스트를 요약합니다.
+    @param text 요약할 텍스트입니다.
+    @returns 요약된 텍스트 또는 오류 메시지를 반환하는 Promise 객체입니다.
+    """
+    if not text.strip():
+        return '정보를 추출할 텍스트가 제공되지 않았습니다.'
+    try:
+        completion = client.chat.completions.create(
+            model='gpt-3.5-turbo',
+            messages=[
+                { 
+                    'role': 'system', 
+                    'content': '''당신은 이미지 OCR 처리 Q&A 및 정보 추출 어시스턴트입니다. 사용자가 사진을 업로드 하면 구글 클라우드 비전 API가 OCR 텍스트를 추출하여 제공된 텍스트를 분석하여 질문에 답하거나, 텍스트에서 중요한 정보를 추출해 사용자에게 유용하고 흥미로운 방식으로 전달하세요.
+                    
+당신의 임무는 다음과 같습니다:
+1. 사진을 통해 추출된 텍스트를 주의 깊게 읽고 이해합니다.
+2. 사진을 통해 추출된 텍스트의 끝부분에 특정 질문이 포함되어 있는지 확인합니다.
+3. 특정 질문이 있는 경우:
+    a. 텍스트의 이전 부분에 있는 정보만을 사용하여 질문에 답변합니다.
+    b. 답변을 간결하면서도 창의적으로 표현합니다.
+    c. 질문에 대한 답변을 텍스트에서 찾을 수 없는 경우, "제공된 사진에서 해당 질문에 대한 답변을 찾을 수 없습니다."라고 응답하되, 추가적인 통찰이나 관련 정보를 제공하려고 노력합니다.
+4. 특정 질문이 없는 경우:
+    a. 사진(텍스트)에서 핵심 정보, 사실, 주요 개체(예: 이름, 날짜, 장소, 회사, 특정 항목 및 해당 값) 및 중요한 세부 정보를 추출합니다.
+    b. 이 정보를 명확하고 구조화된 방식으로 제시하되, 사용자에게 흥미롭고 창의적인 방식으로 전달합니다. (예: "주요 항목: 값" 또는 "흥미로운 사실: ...").
+
+예시 1 (질문 포함):
+텍스트: "문서 내용입니다. 프로젝트명: 오로라, 책임자: 이지혜, 시작일: 2024-03-01. 질문: 이 프로젝트의 책임자는 누구인가요?"
+당신의 응답: "이 프로젝트의 책임자는 이지혜입니다. 그녀는 프로젝트의 성공을 이끌 중요한 역할을 맡고 있습니다."
+
+예시 2 (질문 없음):
+텍스트: "회의록 요약: 안건 - 신규 마케팅 전략 논의. 참석자: 김민준, 박서연, 최현우. 결정사항: 1분기 내 소셜 미디어 캠페인 실행."
+당신의 응답: "회의의 주요 내용은 다음과 같습니다:\n- 안건: 신규 마케팅 전략 논의\n- 참석자: 김민준, 박서연, 최현우\n- 결정사항: 1분기 내 소셜 미디어 캠페인 실행"
+
+예시 3 (질문은 있으나 답변을 찾을 수 없음):
+텍스트: "제품 설명서: 스마트 워치 모델 X. 주요 기능: 심박수 측정, GPS, 방수. 질문: 배터리 지속 시간은 얼마나 되나요?"
+당신의 응답: "제공된 사진에서 배터리 지속 시간에 대한 정보는 찾을 수 없습니다. 하지만 이 스마트 워치의 주요 기능은 심박수 측정, GPS, 방수입니다. 배터리 지속 시간에 대한 정보는 제조사에 문의해보세요!"
+
+예시 4 (장소를 나타내는 사진):
+텍스트: "사진 설명: 서울의 경복궁. 역사적 건축물로 유명하며, 매년 많은 관광객이 방문합니다.", "여기가 어디인가요?"
+당신의 응답: "이곳은 서울의 경복궁입니다. 한국의 역사적 건축물로, 조선 왕조의 중심지였으며 지금도 많은 관광객이 찾는 명소입니다."
+
+제공된 텍스트(사진)를 기반으로 정확하고 창의적으로 응답해주세요.'''
+                },
+                { 'role': 'user', 'content': text },
+            ],
+            max_tokens=500,  # 더 풍부한 응답을 위해 토큰 수 증가
+            temperature=0.7,  # 창의성을 높이기 위해 temperature 값 증가
+        )
+
+        information = completion.choices[0].message.content
+        return information or '텍스트에서 정보를 가져올 수 없습니다.'
+
+    except Exception as error:
+        print('정보 추출을 위해 OpenAI API 호출 중 오류:', error)
+        return f'OpenAI API 오류: {str(error)}'
+
 @app.route('/summarize', methods=['POST'])
 def summarize_document():
     try:
-        if 'image' not in request.files:
-            return jsonify({'error': '이미지 파일이 필요합니다'}), 400
-
-        file = request.files['image']
-        if file.filename == '':
-            return jsonify({'error': '선택된 파일이 없습니다'}), 400
-
-        if not allowed_file(file.filename):
-            return jsonify({'error': '지원하지 않는 파일 형식입니다'}), 400
-
-        filename = f"{int(time.time())}_{secure_filename(file.filename)}"
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        file.save(filepath)
-
-        try:
-            # OCR로 텍스트 추출
-            ocr_text, _ = extract_text_with_vision(filepath)
-            
-            if not ocr_text:
-                return jsonify({'error': '텍스트를 추출할 수 없습니다'}), 400
-
-            # OpenAI를 사용하여 텍스트 요약
-            prompt = f"""
-            다음은 계약서에서 추출한 텍스트입니다. 중요한 내용을 요약해주세요:
-            {ocr_text}
-            
-            다음 형식으로 요약해주세요:
-            1. 계약 당사자
-            2. 주요 계약 내용
-            3. 중요 날짜
-            4. 특이사항
-            """
-
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "당신은 계약서 분석 전문가입니다. 계약서의 중요한 내용을 명확하고 구조화된 방식으로 요약해주세요."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=500,
-                temperature=0.3
-            )
-
-            summary = response.choices[0].message.content
-
-            return jsonify({
-                'summary': summary,
-                'original_text': ocr_text
-            })
-
-        finally:
-            # 임시 파일 삭제
-            if os.path.exists(filepath):
-                os.remove(filepath)
-
+        session_id = request.form.get('session_id')
+        
+        if not session_id or session_id not in ocr_results_cache:
+            return jsonify({'error': '유효하지 않은 세션 ID입니다'}), 400
+        
+        ocr_data = ocr_results_cache[session_id]
+        combined_text = ocr_data['text']
+        
+        if not combined_text:
+            return jsonify({'error': '텍스트를 추출할 수 없습니다'}), 400
+        
+        # OpenAI를 사용하여 텍스트 요약
+        summary = getInfoFromTextWithOpenAI(combined_text)
+        
+        return jsonify({
+            'summary': summary,
+            'original_text': combined_text,
+            'session_id': session_id
+        })
+        
     except Exception as e:
         print(f"요약 중 오류 발생: {str(e)}")
         return jsonify({'error': str(e)}), 500

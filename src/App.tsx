@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
+import NetflixLoader from './components/NetflixLoader';
+import MediaUploader from './components/MediaUploader';
 
 interface CharBox {
   x1: number;
@@ -12,13 +14,16 @@ interface DetectedObject {
   text: string;
   bbox: CharBox;
   color?: string;
+  fileName?: string;
+  pageIndex?: number;
 }
 
 interface MediaItem {
   id: string;
-  type: 'video' | 'image';
+  type: 'image' | 'video';
   url: string;
   file: File;
+  sessionId?: string;
 }
 
 interface TimelineItem {
@@ -61,184 +66,102 @@ const App: React.FC = () => {
   const searchRef = useRef<HTMLDivElement>(null);
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [isProcessingYoutube, setIsProcessingYoutube] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [searchResultPages, setSearchResultPages] = useState<number[]>([]);
+  const [pageNotification, setPageNotification] = useState<{show: boolean, direction: 'prev' | 'next' | null}>({
+    show: false,
+    direction: null
+  });
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      console.log('=== 파일 업로드 시작 ===');
-      console.log('파일 정보:', {
-        name: file.name,
-        type: file.type,
-        size: file.size
-      });
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
 
-      setIsProcessing(true);
-      setIsAnalyzing(true);
-      setError(null);
-      const url = URL.createObjectURL(file);
-      const type = file.type.startsWith('video/') ? 'video' : 'image';
+    console.log('=== 파일 업로드 시작 ===');
+    console.log('파일 개수:', files.length);
 
-      const newMediaItem: MediaItem = {
-        id: Date.now().toString(),
-        type,
-        url,
-        file
-      };
-
-      try {
-        // 서버 URL 확인
-        const serverUrl = 'http://localhost:5001';
-        const endpoint = type === 'video' ? 'upload' : 'upload-image';
-        const fullUrl = `${serverUrl}/${endpoint}`;
-
-        const formData = new FormData();
-        formData.append(type === 'video' ? 'video' : 'image', file);
-        formData.append('analyze', 'true');
-
-        console.log('=== OCR 분석 요청 시작 ===');
-        console.log('요청 URL:', fullUrl);
-        console.log('요청 데이터:', {
-          type: type,
-          analyze: true
-        });
-        
-        const response = await fetch(fullUrl, {
-          method: 'POST',
-          body: formData,
-          headers: {
-            'Accept': 'application/json',
-          },
-        });
-
-        console.log('서버 응답 상태:', response.status);
-        
-        if (!response.ok) {
-          const errorData = await response.json();
-          console.error('업로드 오류:', errorData);
-          throw new Error(errorData.error || '파일 업로드에 실패했습니다');
-        }
-
-        const data = await response.json();
-        console.log('=== 서버 응답 데이터 ===');
-        console.log('업로드 성공:', data);
-
-        // OCR 분석 시작
-        const ocrFormData = new FormData();
-        ocrFormData.append('image', file);
-        ocrFormData.append('query', '');
-        ocrFormData.append('mode', 'normal');
-
-        console.log('=== OCR 분석 요청 ===');
-        const ocrResponse = await fetch('http://localhost:5001/analyze-image', {
-          method: 'POST',
-          body: ocrFormData,
-          headers: {
-            'Accept': 'application/json',
-          },
-        });
-
-        if (!ocrResponse.ok) {
-          const errorData = await ocrResponse.json();
-          console.error('OCR 분석 오류:', errorData);
-          throw new Error(errorData.error || 'OCR 분석에 실패했습니다');
-        }
-
-        const ocrData = await ocrResponse.json();
-        console.log('OCR 결과:', ocrData.objects ? `${ocrData.objects.length}개의 텍스트 감지됨` : '텍스트 없음');
-
-        if (ocrData.objects) {
-          setOcrResults(ocrData.objects);
-          console.log('OCR 결과 저장 완료');
-        }
-        
-        // 서버 응답이 성공적일 때만 미디어 아이템 추가 및 선택
-        setMediaItems(prev => [...prev, newMediaItem]);
-        setSelectedMedia(newMediaItem);
-        setMediaType(type);
-        setMediaUrl(url);
-        setDetectedObjects([]);
-        setTimeline([]);
-
-        // 비디오인 경우 자막 추출 시작
-        if (type === 'video' && data.file_url) {
-          console.log('=== 비디오 자막 추출 시작 ===');
-          const filename = data.file_url.split('/').pop();
-          if (filename) {
-            try {
-              const subtitleResponse = await fetch(`${serverUrl}/extract-subtitles/${filename}`, {
-                method: 'POST',
-                headers: {
-                  'Accept': 'application/json',
-                },
-              });
-
-              if (subtitleResponse.ok) {
-                const subtitleData = await subtitleResponse.json();
-                console.log('자막 추출 성공:', subtitleData);
-              }
-            } catch (error) {
-              console.error('자막 추출 오류:', error);
-            }
-          }
-        }
-      } catch (error) {
-        console.error('=== 오류 발생 ===');
-        console.error('오류 상세:', error);
-        setError(error instanceof Error ? error.message : '업로드 중 오류가 발생했습니다');
-      } finally {
-        console.log('=== 처리 완료 ===');
-        setIsProcessing(false);
-        setIsAnalyzing(false);
-      }
-    }
-  };
-
-  const handleRefreshOcr = async () => {
-    if (!selectedMedia) return;
-
+    setIsProcessing(true);
     setIsAnalyzing(true);
-    try {
-      const formData = new FormData();
-      formData.append(selectedMedia.type === 'video' ? 'video' : 'image', selectedMedia.file);
+    setError(null);
 
-      const response = await fetch('http://localhost:5001/analyze-image', {
+    const formData = new FormData();
+    for (let i = 0; i < files.length; i++) {
+      formData.append('images[]', files[i]);
+    }
+
+    try {
+      const response = await fetch('http://localhost:5001/upload-image', {
         method: 'POST',
         body: formData,
+        headers: {
+          'Accept': 'application/json',
+        },
       });
 
       if (!response.ok) {
-        throw new Error('OCR 분석에 실패했습니다');
+        const errorData = await response.json();
+        throw new Error(errorData.error || '파일 업로드에 실패했습니다');
       }
 
       const data = await response.json();
-      if (data.objects) {
-        setOcrResults(data.objects);
-        setDetectedObjects([]); // 검색 결과 초기화
-      }
+      console.log('=== 서버 응답 데이터 ===');
+      console.log('업로드 성공:', data);
+
+      // 세션 ID 저장
+      setSessionId(data.session_id);
+
+      // 각 파일에 대한 미디어 아이템 생성
+      const newMediaItems: MediaItem[] = Array.from(files).map((file, index) => {
+        const url = URL.createObjectURL(file);
+        const type = file.type.startsWith('video/') ? 'video' : 'image';
+        return {
+          id: `${Date.now()}_${index}`,
+          type,
+          url,
+          file,
+          sessionId: data.session_id
+        };
+      });
+
+      setMediaItems(prev => [...prev, ...newMediaItems]);
+      setSelectedMedia(newMediaItems[0]);
+      setMediaType(newMediaItems[0].type);
+      setMediaUrl(newMediaItems[0].url);
+      setDetectedObjects([]);
+      setTimeline([]);
+
     } catch (error) {
-      console.error('OCR refresh error:', error);
-      setError(error instanceof Error ? error.message : 'OCR 분석 중 오류가 발생했습니다');
+      console.error('=== 오류 발생 ===');
+      console.error('오류 상세:', error);
+      setError(error instanceof Error ? error.message : '업로드 중 오류가 발생했습니다');
     } finally {
+      console.log('=== 처리 완료 ===');
+      setIsProcessing(false);
       setIsAnalyzing(false);
     }
   };
 
   const handleSearch = async (mode: 'normal' | 'smart') => {
-    if (!searchTerm || !selectedMedia) {
+    if (!searchTerm || !selectedMedia || !sessionId) {
       setDetectedObjects([]);
       setTimeline([]);
       setNoResults(false);
+      setSearchResultPages([]);
+      setPageNotification({ show: false, direction: null });
       return;
     }
 
     console.log('=== 검색 시작 ===');
     console.log('검색어:', searchTerm);
     console.log('검색 모드:', mode);
-    console.log('저장된 OCR 결과:', ocrResults);
+    console.log('세션 ID:', sessionId);
+    console.log('현재 페이지:', currentPage);
 
     try {
       const formData = new FormData();
-      formData.append('image', selectedMedia.file);
+      formData.append('session_id', sessionId);
       formData.append('query', searchTerm);
       formData.append('mode', mode);
 
@@ -253,26 +176,98 @@ const App: React.FC = () => {
       }
 
       const data: ApiResponse = await response.json();
+      console.log('=== 서버 응답 데이터 ===');
+      console.log('전체 데이터:', JSON.stringify(data, null, 2));
       
-      if (data.type === 'image') {
-        const results = data.objects || [];
-        setDetectedObjects(results);
-        setNoResults(results.length === 0);
+      if (data.type === 'image' && Array.isArray(data.objects)) {
+        const objects = data.objects;
+        const searchResults: DetectedObject[] = [];
+        
+        // 일반 검색 모드
+        if (mode === 'normal') {
+          console.log('일반 검색 모드 실행');
+          
+          console.log('검색 대상 단어 목록:', objects.map(obj => ({
+            text: obj.text,
+            bbox: obj.bbox
+          })));
+          
+          // 각 페이지별로 검색 결과 처리
+          mediaItems.forEach((media, pageIndex) => {
+            objects.forEach((obj) => {
+              if (obj.text.toLowerCase().includes(searchTerm.toLowerCase())) {
+                console.log('매칭된 단어:', obj.text);
+                console.log('매칭된 단어의 bbox:', obj.bbox);
+                console.log('현재 처리 중인 페이지:', pageIndex);
+                
+                // bbox가 올바른 형식인지 확인
+                if (obj.bbox && 
+                    typeof obj.bbox.x1 === 'number' && 
+                    typeof obj.bbox.y1 === 'number' && 
+                    typeof obj.bbox.x2 === 'number' && 
+                    typeof obj.bbox.y2 === 'number') {
+                  searchResults.push({
+                    ...obj,
+                    pageIndex: pageIndex
+                  });
+                } else {
+                  console.error('잘못된 bbox 형식:', obj.bbox);
+                }
+              }
+            });
+          });
+        }
+        // 스마트 검색 모드
+        else if (mode === 'smart') {
+          console.log('스마트 검색 모드 실행');
+          console.log('검색 결과:', objects);
+          
+          // 각 페이지별로 검색 결과 처리
+          mediaItems.forEach((media, pageIndex) => {
+            objects.forEach((obj) => {
+              if (obj.bbox && 
+                  typeof obj.bbox.x1 === 'number' && 
+                  typeof obj.bbox.y1 === 'number' && 
+                  typeof obj.bbox.x2 === 'number' && 
+                  typeof obj.bbox.y2 === 'number') {
+                searchResults.push({
+                  ...obj,
+                  pageIndex: pageIndex
+                });
+              } else {
+                console.error('잘못된 bbox 형식:', obj.bbox);
+              }
+            });
+          });
+        }
+
+        console.log('최종 검색 결과:', searchResults);
+        setDetectedObjects(searchResults);
+        setNoResults(searchResults.length === 0);
         setTimeline([]);
-        setMediaType('image');
-        setMediaUrl(selectedMedia.url);
-      } else {
-        const results = data.timeline || [];
-        setDetectedObjects([]);
-        setTimeline(results);
-        setNoResults(results.length === 0);
-        setMediaType('video');
-        setMediaUrl(`http://localhost:5001${data.file_url}`);
+
+        // 검색 결과가 있는 페이지 번호 저장
+        const pages = Array.from(new Set(searchResults.map(obj => obj.pageIndex).filter((p): p is number => p !== undefined)));
+        console.log('검색 결과가 있는 페이지들:', pages);
+        setSearchResultPages(pages);
+
+        // 현재 페이지가 아닌 다른 페이지에 결과가 있는지 확인
+        if (pages.length > 0 && !pages.includes(currentPage)) {
+          const nextPage = pages.find(p => p > currentPage);
+          const prevPage = pages.find(p => p < currentPage);
+          
+          if (nextPage) {
+            setPageNotification({ show: true, direction: 'next' });
+          } else if (prevPage) {
+            setPageNotification({ show: true, direction: 'prev' });
+          }
+        } else {
+          setPageNotification({ show: false, direction: null });
+        }
       }
     } catch (error) {
-      console.error('검색 중 오류 발생:', error);
+      console.error('검색 오류:', error);
       setError(error instanceof Error ? error.message : '검색 중 오류가 발생했습니다');
-      setNoResults(false);
     }
   };
 
@@ -305,8 +300,8 @@ const App: React.FC = () => {
   };
 
   const handleSummarize = async () => {
-    if (!selectedMedia || selectedMedia.type !== 'image') {
-      setError('이미지 파일만 요약할 수 있습니다');
+    if (!sessionId) {
+      setError('이미지가 업로드되지 않았습니다');
       return;
     }
 
@@ -316,7 +311,7 @@ const App: React.FC = () => {
 
     try {
       const formData = new FormData();
-      formData.append('image', selectedMedia.file);
+      formData.append('session_id', sessionId);
 
       const response = await fetch('http://localhost:5001/summarize', {
         method: 'POST',
@@ -433,6 +428,56 @@ const App: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    // 3초 후에 로딩 화면을 숨깁니다
+    const timer = setTimeout(() => {
+      setIsLoading(false);
+    }, 3000);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  // 페이지 변경 시 알림 상태 업데이트
+  const handlePageChange = (newPage: number) => {
+    setCurrentPage(newPage);
+    if (searchResultPages.length > 0) {
+      const nextPage = searchResultPages.find(p => p > newPage);
+      const prevPage = searchResultPages.find(p => p < newPage);
+      
+      if (nextPage) {
+        setPageNotification({ show: true, direction: 'next' });
+      } else if (prevPage) {
+        setPageNotification({ show: true, direction: 'prev' });
+      } else {
+        setPageNotification({ show: false, direction: null });
+      }
+    }
+  };
+
+  const handlePrevPage = () => {
+    if (currentPage > 0) {
+      handlePageChange(currentPage - 1);
+      const prevMedia = mediaItems[currentPage - 1];
+      setSelectedMedia(prevMedia);
+      setMediaType(prevMedia.type);
+      setMediaUrl(prevMedia.url);
+    }
+  };
+
+  const handleNextPage = () => {
+    if (currentPage < mediaItems.length - 1) {
+      handlePageChange(currentPage + 1);
+      const nextMedia = mediaItems[currentPage + 1];
+      setSelectedMedia(nextMedia);
+      setMediaType(nextMedia.type);
+      setMediaUrl(nextMedia.url);
+    }
+  };
+
+  if (isLoading) {
+    return <NetflixLoader />;
+  }
+
   return (
     <div className="App">
       <div className="app-header">
@@ -446,6 +491,7 @@ const App: React.FC = () => {
             <input
               type="file"
               accept="image/*"
+              multiple
               onChange={handleFileUpload}
               className="file-input"
             />
@@ -460,7 +506,7 @@ const App: React.FC = () => {
             />
           </div>
         </div>
-        {isProcessing && <p>Processing...</p>}
+        {isProcessing && <p>처리 중...</p>}
         {error && <p className="error">{error}</p>}
       </div>
 
@@ -560,60 +606,122 @@ const App: React.FC = () => {
               ref={videoRef}
             />
           ) : (
-            <div style={{ position: 'relative', display: 'inline-block' }}>
-              <img 
-                src={mediaUrl} 
-                alt="Selected" 
-                ref={imageRef}
-                style={{ maxWidth: '100%', maxHeight: '400px' }}
-              />
-              {isAnalyzing && (
-                <div className="analyzing-overlay">
-                  <div className="analyzing-content">
-                    <i className="fas fa-spinner fa-spin"></i>
-                    <span>이미지 분석 중...</span>
-                  </div>
+            <div className="image-viewer">
+              <div className="image-navigation">
+                <div className="nav-button-container">
+                  <button 
+                    className="nav-button prev"
+                    onClick={handlePrevPage}
+                    disabled={currentPage === 0}
+                  >
+                    &lt;
+                  </button>
+                  {pageNotification.show && pageNotification.direction === 'prev' && (
+                    <div className="page-notification left">
+                      이전 페이지에 있는 결과에요!
+                    </div>
+                  )}
                 </div>
-              )}
-              {detectedObjects.map((obj, index) => {
-                const img = imageRef.current;
-                if (!img) return null;
-                
-                const rect = img.getBoundingClientRect();
-                const scaleX = rect.width / img.naturalWidth;
-                const scaleY = rect.height / img.naturalHeight;
-                
-                const bbox = obj.bbox;
-                const centerX = ((bbox.x1 + bbox.x2) / 2) * scaleX;
-                const centerY = ((bbox.y1 + bbox.y2) / 2) * scaleY;
-                const radius = Math.max((bbox.x2 - bbox.x1), (bbox.y2 - bbox.y1)) * scaleX / 2;
-                
-                return (
-                  <div
-                    key={index}
-                    style={{
-                      position: 'absolute',
-                      left: `${centerX - radius}px`,
-                      top: `${centerY - radius}px`,
-                      width: `${radius * 2}px`,
-                      height: `${radius * 2}px`,
-                      border: `2px solid ${obj.color || (searchMode === 'smart' ? 'yellow' : 'red')}`,
-                      borderRadius: '50%',
-                      pointerEvents: 'none',
-                      zIndex: 1
-                    }}
+                <div className="image-container" style={{ position: 'relative' }}>
+                  <img 
+                    src={mediaUrl} 
+                    alt="Selected" 
+                    ref={imageRef}
+                    style={{ width: '100%', height: 'auto', maxHeight: '400px' }}
                   />
-                );
-              })}
-              {!isAnalyzing && (
-                <button 
-                  className="refresh-button"
-                  onClick={handleRefreshOcr}
-                  title="OCR 새로고침"
-                >
-                  <i className="fas fa-sync-alt"></i>
-                </button>
-              )}
+                  {isAnalyzing && (
+                    <div className="analyzing-overlay">
+                      <div className="analyzing-content">
+                        <i className="fas fa-spinner fa-spin"></i>
+                        <span>이미지 분석 중...</span>
+                      </div>
+                    </div>
+                  )}
+                  {detectedObjects
+                    .filter(obj => obj.pageIndex === currentPage)
+                    .map((obj, index) => {
+                      const img = imageRef.current;
+                      if (!img) return null;
+                      
+                      const rect = img.getBoundingClientRect();
+                      const bbox = obj.bbox;
+                      
+                      console.log('=== 동그라미 렌더링 시작 ===');
+                      console.log('검색된 텍스트:', obj.text);
+                      console.log('원본 bbox:', bbox);
+                      console.log('이미지 크기:', {
+                        naturalWidth: img.naturalWidth,
+                        naturalHeight: img.naturalHeight,
+                        displayWidth: rect.width,
+                        displayHeight: rect.height
+                      });
+
+                      // bbox 좌표가 정규화된 값(0~1)인지 확인
+                      const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
+                      console.log('bbox가 정규화된 값인가?', isNormalized);
+
+                      // 이미지의 실제 크기와 표시 크기의 비율 계산
+                      const scaleX = rect.width / img.naturalWidth;
+                      const scaleY = rect.height / img.naturalHeight;
+                      
+                      // bbox 좌표를 이미지의 실제 크기 기준으로 계산
+                      const x1 = isNormalized ? bbox.x1 * img.naturalWidth : bbox.x1;
+                      const y1 = isNormalized ? bbox.y1 * img.naturalHeight : bbox.y1;
+                      const x2 = isNormalized ? bbox.x2 * img.naturalWidth : bbox.x2;
+                      const y2 = isNormalized ? bbox.y2 * img.naturalHeight : bbox.y2;
+                      
+                      // 중심점과 반지름 계산 (이미지 실제 크기 기준)
+                      const centerX = (x1 + x2) / 2;
+                      const centerY = (y1 + y2) / 2;
+                      const radius = Math.max(x2 - x1, y2 - y1) / 2;
+                      
+                      // 표시 크기로 변환
+                      const displayCenterX = centerX * scaleX;
+                      const displayCenterY = centerY * scaleY;
+                      const displayRadius = radius * scaleX;
+                      
+                      console.log('계산된 좌표:', {
+                        original: { x1, y1, x2, y2, centerX, centerY, radius },
+                        display: { displayCenterX, displayCenterY, displayRadius },
+                        scale: { scaleX, scaleY }
+                      });
+                      
+                      return (
+                        <div
+                          key={index}
+                          style={{
+                            position: 'absolute',
+                            left: `${displayCenterX - displayRadius}px`,
+                            top: `${displayCenterY - displayRadius}px`,
+                            width: `${displayRadius * 2}px`,
+                            height: `${displayRadius * 2}px`,
+                            border: "2px solid red",
+                            borderRadius: "50%",
+                            pointerEvents: "none",
+                            zIndex: 1
+                          }}
+                        />
+                      );
+                    })}
+                </div>
+                <div className="nav-button-container">
+                  <button 
+                    className="nav-button next"
+                    onClick={handleNextPage}
+                    disabled={currentPage === mediaItems.length - 1}
+                  >
+                    &gt;
+                  </button>
+                  {pageNotification.show && pageNotification.direction === 'next' && (
+                    <div className="page-notification right">
+                      다음 페이지에 있는 결과에요!
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="page-indicator">
+                {currentPage + 1} / {mediaItems.length}
+              </div>
             </div>
           )}
           
@@ -650,11 +758,20 @@ const App: React.FC = () => {
                       {Math.floor(item.timestamp / 60)}:{Math.floor(item.timestamp % 60).toString().padStart(2, '0')}
                     </span>
                     <div className="texts">
-                      {item.texts.map((text, i) => (
-                        <div key={i} className="detected-text">
-                          {text.text}
-                        </div>
-                      ))}
+                      {item.texts.map((text, i) => {
+                        const isMatch = searchTerm && text.text.toLowerCase().includes(searchTerm.toLowerCase());
+                        return (
+                          <div 
+                            key={i} 
+                            className="detected-text"
+                            style={{ 
+                              backgroundColor: isMatch ? 'rgba(0, 123, 255, 0.3)' : 'transparent'
+                            }}
+                          >
+                            {text.text}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
