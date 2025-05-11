@@ -1191,6 +1191,7 @@ def getInfoFromTextWithOpenAI(text: str) -> str | None:
 def summarize_document():
     try:
         session_id = request.form.get('session_id')
+        message = request.form.get('message', '')
         
         if not session_id or session_id not in ocr_results_cache:
             return jsonify({'error': '유효하지 않은 세션 ID입니다'}), 400
@@ -1201,8 +1202,14 @@ def summarize_document():
         if not combined_text:
             return jsonify({'error': '텍스트를 추출할 수 없습니다'}), 400
         
-        # OpenAI를 사용하여 텍스트 요약
-        summary = getInfoFromTextWithOpenAI(combined_text)
+        # 사용자의 질문이 있는 경우, 질문과 함께 텍스트를 전달
+        if message:
+            prompt = f"다음은 이미지에서 추출된 텍스트입니다:\n\n{combined_text}\n\n사용자의 질문: {message}\n\n위 텍스트를 바탕으로 질문에 답변해주세요."
+        else:
+            prompt = combined_text
+        
+        # OpenAI를 사용하여 텍스트 요약 또는 질문 답변
+        summary = getInfoFromTextWithOpenAI(prompt)
         
         return jsonify({
             'summary': summary,

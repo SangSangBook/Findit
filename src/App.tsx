@@ -74,6 +74,11 @@ const App: React.FC = () => {
     show: false,
     direction: null
   });
+  const [chatMessage, setChatMessage] = useState('');
+  const [chatResponse, setChatResponse] = useState('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isModalImageLoaded, setIsModalImageLoaded] = useState(false);
+  const modalImageRef = useRef<HTMLImageElement>(null);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -333,6 +338,32 @@ const App: React.FC = () => {
     }
   };
 
+  const handleChat = async () => {
+    if (!chatMessage.trim() || !sessionId) return;
+    
+    try {
+      const formData = new FormData();
+      formData.append('session_id', sessionId);
+      formData.append('message', chatMessage);
+      
+      const response = await fetch('http://localhost:5001/summarize', {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (!response.ok) {
+        throw new Error('채팅 처리 중 오류가 발생했습니다.');
+      }
+      
+      const data = await response.json();
+      setChatResponse(data.summary);
+      setChatMessage(''); // Clear the input after sending
+    } catch (error) {
+      console.error('채팅 처리 중 오류:', error);
+      alert('채팅 처리 중 오류가 발생했습니다.');
+    }
+  };
+
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.target instanceof HTMLElement && e.target.closest('.drag-handle')) {
       setIsDragging(true);
@@ -474,6 +505,10 @@ const App: React.FC = () => {
     }
   };
 
+  const handleModalImageLoad = () => {
+    setIsModalImageLoaded(true);
+  };
+
   if (isLoading) {
     return <NetflixLoader />;
   }
@@ -597,7 +632,7 @@ const App: React.FC = () => {
       </div>
 
       {selectedMedia && (
-        <div className="selected-media">
+        <div className={`selected-media ${selectedMedia ? 'has-media' : ''}`}>
           {selectedMedia.type === 'video' ? (
             <video 
               src={mediaUrl} 
@@ -622,12 +657,12 @@ const App: React.FC = () => {
                     </div>
                   )}
                 </div>
-                <div className="image-container" style={{ position: 'relative' }}>
+                <div className="image-container" style={{ position: 'relative' }} onClick={() => setIsModalOpen(true)}>
                   <img 
                     src={mediaUrl} 
                     alt="Selected" 
                     ref={imageRef}
-                    style={{ width: '100%', height: 'auto', maxHeight: '400px' }}
+                    style={{ width: '100%', height: 'auto', maxHeight: '400px', cursor: 'pointer' }}
                   />
                   {isAnalyzing && (
                     <div className="analyzing-overlay">
@@ -725,6 +760,29 @@ const App: React.FC = () => {
             </div>
           )}
           
+          {selectedMedia.type === 'image' && (
+            <div className="chat-section">
+              <h3>이미지에 대해 질문해보세요</h3>
+              <div className="chat-input-container">
+                <input
+                  type="text"
+                  value={chatMessage}
+                  onChange={(e) => setChatMessage(e.target.value)}
+                  placeholder="질문을 입력하세요..."
+                  className="chat-input"
+                />
+                <button onClick={handleChat} className="chat-button">
+                  정보 가져오기
+                </button>
+              </div>
+              {chatResponse && (
+                <div className="chat-response">
+                  <p>{chatResponse}</p>
+                </div>
+              )}
+            </div>
+          )}
+
           {noResults && (
             <div className="no-results-message">
               <i className="fas fa-search"></i>
@@ -796,6 +854,66 @@ const App: React.FC = () => {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {isModalOpen && selectedMedia && selectedMedia.type === 'image' && (
+        <div className="image-modal" onClick={() => setIsModalOpen(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setIsModalOpen(false)}>×</button>
+            <div className="modal-image-container">
+              <img 
+                ref={modalImageRef}
+                src={mediaUrl} 
+                alt="Full size" 
+                style={{ width: '100%', height: 'auto' }}
+                onLoad={handleModalImageLoad}
+              />
+              {isModalImageLoaded && detectedObjects
+                .filter(obj => obj.pageIndex === currentPage)
+                .map((obj, index) => {
+                  if (!modalImageRef.current) return null;
+                  
+                  const imgElement = modalImageRef.current;
+                  const rect = imgElement.getBoundingClientRect();
+                  const bbox = obj.bbox;
+                  
+                  const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
+                  const scaleX = rect.width / imgElement.naturalWidth;
+                  const scaleY = rect.height / imgElement.naturalHeight;
+                  
+                  const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
+                  const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
+                  const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
+                  const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
+                  
+                  const centerX = (x1 + x2) / 2;
+                  const centerY = (y1 + y2) / 2;
+                  const radius = Math.max(x2 - x1, y2 - y1) / 2;
+                  
+                  const displayCenterX = centerX * scaleX;
+                  const displayCenterY = centerY * scaleY;
+                  const displayRadius = radius * scaleX;
+                  
+                  return (
+                    <div
+                      key={index}
+                      style={{
+                        position: 'absolute',
+                        left: `${displayCenterX - displayRadius}px`,
+                        top: `${displayCenterY - displayRadius}px`,
+                        width: `${displayRadius * 2}px`,
+                        height: `${displayRadius * 2}px`,
+                        border: "2px solid red",
+                        borderRadius: "50%",
+                        pointerEvents: "none",
+                        zIndex: 1
+                      }}
+                    />
+                  );
+                })}
+            </div>
+          </div>
         </div>
       )}
     </div>
