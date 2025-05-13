@@ -276,136 +276,35 @@ def analyze_image(image_path, query, mode='normal'):
         ocr_text, coordinates = extract_text_with_vision(image_path)
         detected_objects = []
         
+        # coordinates가 비어있으면 빈 배열 반환
+        if not coordinates:
+            print("OCR 결과가 비어있습니다.")
+            return []
+            
         print(f"검색 가능한 텍스트 목록: {list(coordinates.keys())}")
         
-        if mode == 'smart':
-            # OCR에서 추출된 텍스트를 기반으로 연관어를 찾음
-            ocr_texts = list(coordinates.keys())
-            related_words = get_related_words(query, ocr_texts)
-            print(f"연관어 목록: {related_words}")
+        # 일반 검색
+        query_lower = query.lower().strip()
+        for text, data in coordinates.items():
+            text_lower = text.lower().strip()
+            # 특수문자와 공백 제거
+            text_clean = re.sub(r'[^\w\s]', '', text_lower)
             
-            # 연관어를 단어별로 분리하여 저장
-            related_words_list = []
-            for word in related_words:
-                # 쉼표로 구분된 단어들을 분리
-                words = word.split(',')
-                for w in words:
-                    # 숫자와 특수문자 제거
-                    w = re.sub(r'[0-9\W]+', '', w.strip())
-                    if w and len(w) > 1:  # 한 글자 이상인 단어만 포함
-                        related_words_list.append(w)
-            
-            print(f"처리된 연관어 목록: {related_words_list}")
-        
-        # 인접한 텍스트를 조합하여 새로운 텍스트 생성
-        combined_texts = {}
-        text_items = list(coordinates.items())
-        for i in range(len(text_items) - 1):
-            current_text, current_data = text_items[i]
-            next_text, next_data = text_items[i + 1]
-            
-            # 현재 텍스트와 다음 텍스트의 바운딩 박스가 가까운지 확인
-            current_bbox = current_data['bbox']
-            next_bbox = next_data['bbox']
-            
-            # x 좌표가 가까운지 확인 (같은 줄에 있는지)
-            if abs(current_bbox['x2'] - next_bbox['x1']) < 50:  # 50픽셀 이내
-                combined_text = current_text + next_text
-                combined_bbox = {
-                    'x1': min(current_bbox['x1'], next_bbox['x1']),
-                    'y1': min(current_bbox['y1'], next_bbox['y1']),
-                    'x2': max(current_bbox['x2'], next_bbox['x2']),
-                    'y2': max(current_bbox['y2'], next_bbox['y2'])
-                }
-                combined_texts[combined_text] = {
-                    'bbox': combined_bbox,
-                    'confidence': min(current_data['confidence'], next_data['confidence'])
-                }
-        
-        # 원본 텍스트와 조합된 텍스트를 모두 사용
-        all_texts = {**coordinates, **combined_texts}
-        
-        if mode == 'smart':
-            # OCR에서 추출한 텍스트 중 연관어와 매칭되는 것 찾기
-            for text, data in all_texts.items():
-                text_lower = text.lower().strip()
-                # 특수문자와 공백 제거
-                text_clean = re.sub(r'[^\w\s]', '', text_lower)
-                
-                # 연관어 목록과 비교
-                for word in related_words_list:
-                    word_lower = word.lower().strip()
-                    # 단어의 시작이나 끝에서 매칭
-                    if (text_clean == word_lower or  # 완전한 단어 매칭
-                        text_clean.startswith(word_lower) or  # 단어로 시작
-                        text_clean.endswith(word_lower) or  # 단어가 포함됨
-                        word_lower in text_clean):  # 단어가 포함됨
-                        print(f"매칭 발견: '{text}' (연관어: '{word}')")
-                        # 첫 글자의 바운딩 박스 계산
-                        bbox = data['bbox']
-                        first_char_bbox = {
-                            'x1': bbox['x1'],
-                            'y1': bbox['y1'],
-                            'x2': bbox['x1'] + (bbox['x2'] - bbox['x1']) * 0.1,  # 첫 글자의 너비를 전체 너비의 10%로 설정
-                            'y2': bbox['y2']
-                        }
-                        detected_objects.append({
-                            'text': text,
-                            'bbox': first_char_bbox,
-                            'color': 'yellow'  # 연관어는 노란색
-                        })
-                        break  # 한 번 매칭되면 다음 텍스트로 넘어감
-        else:
-            # 일반 검색
-            query_lower = query.lower().strip()
-            for text, data in all_texts.items():
-                text_lower = text.lower().strip()
-                # 특수문자와 공백 제거
-                text_clean = re.sub(r'[^\w\s]', '', text_lower)
-                
-                # 단어의 시작이나 끝에서 매칭
-                if (text_clean == query_lower or  # 완전한 단어 매칭
-                    text_clean.startswith(query_lower) or  # 단어로 시작
-                    text_clean.endswith(query_lower) or  # 단어가 포함됨
-                    query_lower in text_clean):  # 단어가 포함됨
-                    print(f"매칭 발견: '{text}' (검색어: '{query}')")
-                    # 첫 글자의 바운딩 박스 계산
-                    bbox = data['bbox']
-                    first_char_bbox = {
-                        'x1': bbox['x1'],
-                        'y1': bbox['y1'],
-                        'x2': bbox['x1'] + (bbox['x2'] - bbox['x1']) * 0.1,  # 첫 글자의 너비를 전체 너비의 10%로 설정
-                        'y2': bbox['y2']
-                    }
-                    detected_objects.append({
-                        'text': text,
-                        'bbox': first_char_bbox,
-                        'color': 'red'  # 일반 검색은 빨간색
-                    })
+            # 단어의 시작이나 끝에서 매칭
+            if (text_clean == query_lower or  # 완전한 단어 매칭
+                text_clean.startswith(query_lower) or  # 단어로 시작
+                text_clean.endswith(query_lower) or  # 단어가 포함됨
+                query_lower in text_clean):  # 단어가 포함됨
+                print(f"매칭 발견: '{text}' (검색어: '{query}')")
+                detected_objects.append({
+                    'text': text,
+                    'bbox': data['bbox'],
+                    'confidence': data['confidence']
+                })
         
         print(f"검색 결과: {len(detected_objects)}개의 매칭된 텍스트 발견")
         for obj in detected_objects:
             print(f"매칭된 텍스트: {obj['text']}")
-        
-        # coordinates가 비어있으면 fallback: 전체 텍스트에서 query가 포함된 모든 위치에 대해 bbox 반환
-        if not coordinates or len(coordinates) == 0:
-            print('coordinates가 비어있음. fallback 로직 동작')
-            print(f"OCR TEXT: [{ocr_text}]")
-            print(f"QUERY: [{query}]")
-            # 전처리: 모두 소문자, 특수문자/공백 제거
-            ocr_text_clean = re.sub(r'[^\w]', '', ocr_text.lower())
-            query_clean = re.sub(r'[^\w]', '', query.lower())
-            print(f"OCR TEXT CLEAN: [{ocr_text_clean}]")
-            print(f"QUERY CLEAN: [{query_clean}]")
-            matches = list(re.finditer(re.escape(query_clean), ocr_text_clean))
-            for idx, match in enumerate(matches):
-                detected_objects.append({
-                    'text': query,
-                    'bbox': {'x1': 20*idx+10, 'y1': 20, 'x2': 20*idx+30, 'y2': 40},
-                    'color': 'red'
-                })
-            print(f"fallback 결과: {len(detected_objects)}개의 매칭된 텍스트 발견")
-            return detected_objects
         
         return detected_objects
     except Exception as e:
@@ -496,10 +395,10 @@ def extract_text_with_vision(image_path):
                     if text_content:
                         coordinates[text_content] = {
                             'bbox': {
-                                'x1': min(x_coords),
-                                'y1': min(y_coords),
-                                'x2': max(x_coords),
-                                'y2': max(y_coords)
+                                'x1': x_coords[0],
+                                'y1': y_coords[0],
+                                'x2': x_coords[2],
+                                'y2': y_coords[2]
                             },
                             'confidence': 1.0
                         }
@@ -931,7 +830,7 @@ def detect_image_type(text):
         ]
     }
     
-    # 각 유형별 점수 계산 (최적화된 버전)
+    # 각 유형별 점수 계산
     type_scores = defaultdict(int)
     
     # 텍스트를 단어 단위로 분리
@@ -951,11 +850,19 @@ def detect_image_type(text):
                 type_scores[doc_type] += score
     
     # 가장 높은 점수를 가진 유형 선택
-    max_score = max(type_scores.values())
-    if max_score == 0:
+    if not type_scores:
         return 'OTHER'
+        
+    # 점수가 가장 높은 유형 찾기
+    best_type = 'OTHER'
+    best_score = 0
     
-    return max(type_scores.items(), key=lambda x: x[1])[0]
+    for doc_type, score in type_scores.items():
+        if score > best_score:
+            best_score = score
+            best_type = doc_type
+    
+    return best_type
 
 def get_prompt_for_image_type(image_type, text):
     """이미지 유형에 따른 프롬프트를 생성합니다."""
