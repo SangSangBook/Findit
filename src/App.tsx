@@ -18,6 +18,7 @@ interface DetectedObject {
   color?: string;
   fileName?: string;
   pageIndex?: number;
+  match_type?: string;
 }
 
 interface MediaItem {
@@ -99,7 +100,6 @@ const App: React.FC = () => {
     for (let i = 0; i < files.length; i++) {
       formData.append('images[]', files[i]);
     }
-    formData.append('imageType', selectedImageType);
 
     try {
       const response = await fetch('http://localhost:5001/upload-image', {
@@ -126,6 +126,12 @@ const App: React.FC = () => {
       if (data.text) {
         console.log('OCR 텍스트:', data.text);
         setOcrText(data.text);
+      }
+
+      // 이미지 타입 설정
+      if (data.image_type) {
+        console.log('감지된 이미지 타입:', data.image_type);
+        setSelectedImageType(data.image_type as ImageType);
       }
 
       // 각 파일에 대한 미디어 아이템 생성
@@ -207,7 +213,8 @@ const App: React.FC = () => {
           text: obj.text,
           bbox: obj.bbox,
           confidence: obj.confidence,
-          pageIndex: currentPage
+          pageIndex: currentPage,
+          match_type: obj.match_type || 'exact'
         }));
         
         console.log('검색 결과:', searchResults);

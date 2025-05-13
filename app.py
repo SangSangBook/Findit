@@ -750,12 +750,17 @@ def upload_image():
                 ocr_text, coordinates = extract_text_with_vision(filepath)
                 
                 if ocr_text:
+                    # 이미지 타입 감지
+                    image_type = detect_image_type(ocr_text)
+                    print(f"감지된 이미지 타입: {image_type}")
+                    
                     # 각 이미지의 OCR 결과를 저장
                     image_id = str(len(uploaded_files))
                     ocr_results_cache[image_id] = {
                         'text': ocr_text,
                         'coordinates': coordinates,
-                        'file_url': f'/uploads/{filename}'
+                        'file_url': f'/uploads/{filename}',
+                        'image_type': image_type
                     }
                     
                     # 전체 OCR 텍스트와 좌표 정보 결합
@@ -764,7 +769,8 @@ def upload_image():
                 
                 uploaded_files.append({
                     'filename': filename,
-                    'file_url': f'/uploads/{filename}'
+                    'file_url': f'/uploads/{filename}',
+                    'image_type': image_type if ocr_text else 'OTHER'
                 })
                 
             finally:
@@ -791,7 +797,8 @@ def upload_image():
             'message': '이미지 업로드 성공',
             'session_id': session_id,
             'files': uploaded_files,
-            'text': combined_ocr_text  # OCR 텍스트를 응답에 포함
+            'text': combined_ocr_text,  # OCR 텍스트를 응답에 포함
+            'image_type': uploaded_files[0]['image_type'] if uploaded_files else 'OTHER'  # 첫 번째 이미지의 타입 반환
         })
         
     except Exception as e:
@@ -808,13 +815,42 @@ def detect_image_type(text):
             '계약서', '계약', '계약기간', '당사자', '서명', '계약조건',
             '계약서명', '계약일자', '계약금', '계약자', '피계약자',
             '계약내용', '계약조항', '계약서류', '계약서 작성',
-            '계약서 확인', '계약서 검토', '계약서 승인'
+            '계약서 확인', '계약서 검토', '계약서 승인',
+            '계약서명', '계약서 작성일', '계약서 번호',
+            '계약서 보관', '계약서 관리', '계약서 보관기간',
+            '계약서 보관장소', '계약서 보관자', '계약서 보관방법',
+            '계약서 보관기간', '계약서 보관장소', '계약서 보관자',
+            '계약서 보관방법', '계약서 보관기간', '계약서 보관장소',
+            '계약서 보관자', '계약서 보관방법', '계약서 보관기간',
+            '계약서 보관장소', '계약서 보관자', '계약서 보관방법'
         ],
         'PAYMENT': [
             '영수증', '거래명세서', '결제', '금액', '지출', '수입',
             '정산', '지급', '수령', '지점', '매장', '결제일',
             '결제금액', '결제방법', '결제내역', '결제확인',
-            '영수증 확인', '영수증 발급', '영수증 출력'
+            '영수증 확인', '영수증 발급', '영수증 출력',
+            '카드', '현금', '할인', '부가세', '합계',
+            '일시불', '할부', '포인트', '적립', '승인',
+            '매출', '매입', '거래', '판매', '구매',
+            '가격', '단가', '수량', '금액', '총액',
+            '세금', '부가세', '공급가액', '공급가',
+            '신용카드', '체크카드', '현금영수증',
+            '사업자', '사업자번호', '사업자등록번호',
+            '주소', '전화번호', '대표자', '상호',
+            '품목', '수량', '단가', '금액', '합계',
+            '부가세', '공급가액', '공급가', '세액',
+            '신용카드', '체크카드', '현금영수증',
+            '승인번호', '승인일시', '승인금액',
+            '할인', '포인트', '적립', '사용',
+            '거래일시', '거래일자', '거래시간',
+            '매장명', '지점명', '사업자명',
+            '주소', '전화번호', '대표자',
+            '품목', '수량', '단가', '금액',
+            '합계', '부가세', '공급가액',
+            '세액', '신용카드', '체크카드',
+            '현금영수증', '승인번호', '승인일시',
+            '승인금액', '할인', '포인트', '적립',
+            '사용', '거래일시', '거래일자', '거래시간'
         ],
         'DOCUMENT': [
             '논문', '문서', '보고서', '작성자', '작성일', '결론',
@@ -836,6 +872,7 @@ def detect_image_type(text):
     # 텍스트를 단어 단위로 분리
     words = set(text.split())
     
+    # 각 유형별로 점수 계산
     for doc_type, patterns in type_patterns.items():
         for pattern in patterns:
             # 패턴이 텍스트에 포함되어 있는지 확인
@@ -843,16 +880,18 @@ def detect_image_type(text):
                 # 패턴의 길이에 비례하여 점수 부여
                 score = len(pattern) * 2
                 
-                # 계약서 관련 패턴에 가중치 부여
-                if doc_type == 'CONTRACT' and '계약서' in pattern:
-                    score *= 2
+                # 특정 패턴에 가중치 부여
+                if doc_type == 'CONTRACT' and ('계약서' in pattern or '계약' in pattern):
+                    score *= 3
+                elif doc_type == 'PAYMENT' and ('영수증' in pattern or '거래명세서' in pattern):
+                    score *= 3
                 
                 type_scores[doc_type] += score
     
     # 가장 높은 점수를 가진 유형 선택
     if not type_scores:
         return 'OTHER'
-        
+    
     # 점수가 가장 높은 유형 찾기
     best_type = 'OTHER'
     best_score = 0
@@ -861,6 +900,14 @@ def detect_image_type(text):
         if score > best_score:
             best_score = score
             best_type = doc_type
+    
+    # 계약서와 영수증 구분을 위한 추가 검증
+    if best_type == 'PAYMENT' and any(pattern in text for pattern in ['계약서', '계약']):
+        # 계약서 관련 단어가 있으면 계약서로 판단
+        best_type = 'CONTRACT'
+    
+    print(f"이미지 타입 감지 결과: {best_type} (점수: {best_score})")
+    print(f"감지된 패턴: {[pattern for pattern in type_patterns[best_type] if pattern in text]}")
     
     return best_type
 
