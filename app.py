@@ -941,17 +941,11 @@ def analyze_image():
             
         # 검색어와 텍스트 전처리
         query_clean = query.strip().lower()
-        text_clean = recognized_text.strip().lower()
-        
-        # 이미지 타입 감지
-        image_type = detect_image_type(recognized_text)
-        print(f"감지된 이미지 타입: {image_type}")
         
         # 검색 결과 찾기 (최적화된 버전)
         matches = []
         for text, coord_info in coordinates.items():
-            text_lower = text.lower()
-            if query_clean in text_lower:
+            if query_clean in text.lower():
                 matches.append({
                     'text': text,
                     'bbox': coord_info['bbox'],
@@ -964,8 +958,7 @@ def analyze_image():
         return jsonify({
             'text': recognized_text,
             'matches': matches,
-            'coordinates': coordinates,
-            'image_type': image_type
+            'coordinates': coordinates
         })
         
     except Exception as e:
