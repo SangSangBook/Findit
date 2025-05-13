@@ -256,10 +256,9 @@ const App: React.FC = () => {
     const newSearchTerm = e.target.value;
     setSearchTerm(newSearchTerm);
     
-    // 검색어를 완전히 지웠을 때만 하이라이트 제거
+    // 검색어를 지워도 타임라인은 유지
     if (newSearchTerm === '') {
       setDetectedObjects([]);
-      setTimeline([]);
       setNoResults(false);
     }
   };
