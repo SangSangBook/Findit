@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
 import NetflixLoader from './components/NetflixLoader';
 import MediaUploader from './components/MediaUploader';
+import { ImageType, IMAGE_TYPE_ICONS, IMAGE_TYPE_LABELS } from './types';
+import ImageTypeSelector from './components/ImageTypeSelector';
 
 interface CharBox {
   x1: number;
@@ -79,6 +81,8 @@ const App: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isModalImageLoaded, setIsModalImageLoaded] = useState(false);
   const modalImageRef = useRef<HTMLImageElement>(null);
+  const [selectedImageType, setSelectedImageType] = useState<ImageType>('OTHER');
+  const [ocrText, setOcrText] = useState('');
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -95,6 +99,7 @@ const App: React.FC = () => {
     for (let i = 0; i < files.length; i++) {
       formData.append('images[]', files[i]);
     }
+    formData.append('imageType', selectedImageType);
 
     try {
       const response = await fetch('http://localhost:5001/upload-image', {
@@ -104,7 +109,7 @@ const App: React.FC = () => {
           'Accept': 'application/json',
         },
       });
-
+      
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || '파일 업로드에 실패했습니다');
@@ -116,6 +121,12 @@ const App: React.FC = () => {
 
       // 세션 ID 저장
       setSessionId(data.session_id);
+
+      // OCR 텍스트 저장
+      if (data.text) {
+        console.log('OCR 텍스트:', data.text);
+        setOcrText(data.text);
+      }
 
       // 각 파일에 대한 미디어 아이템 생성
       const newMediaItems: MediaItem[] = Array.from(files).map((file, index) => {
@@ -169,6 +180,7 @@ const App: React.FC = () => {
       formData.append('session_id', sessionId);
       formData.append('query', searchTerm);
       formData.append('mode', mode);
+      formData.append('images[]', selectedMedia.file);
 
       const response = await fetch('http://localhost:5001/analyze-image', {
         method: 'POST',
@@ -180,95 +192,40 @@ const App: React.FC = () => {
         throw new Error(errorData.error || '검색 중 오류가 발생했습니다');
       }
 
-      const data: ApiResponse = await response.json();
+      const data = await response.json();
       console.log('=== 서버 응답 데이터 ===');
       console.log('전체 데이터:', JSON.stringify(data, null, 2));
       
-      if (data.type === 'image' && Array.isArray(data.objects)) {
-        const objects = data.objects;
-        const searchResults: DetectedObject[] = [];
+      // OCR 텍스트 저장
+      if (data.text) {
+        console.log('OCR 텍스트:', data.text);
+        setOcrText(data.text);
+      }
+      
+      if (data.matches && data.matches.length > 0) {
+        const searchResults: DetectedObject[] = data.matches.map((obj: any) => ({
+          text: obj.text,
+          bbox: obj.bbox,
+          confidence: obj.confidence,
+          pageIndex: currentPage
+        }));
         
-        // 일반 검색 모드
-        if (mode === 'normal') {
-          console.log('일반 검색 모드 실행');
-          
-          console.log('검색 대상 단어 목록:', objects.map(obj => ({
-            text: obj.text,
-            bbox: obj.bbox
-          })));
-          
-          // 각 페이지별로 검색 결과 처리
-          mediaItems.forEach((media, pageIndex) => {
-            objects.forEach((obj) => {
-              if (obj.text.toLowerCase().includes(searchTerm.toLowerCase())) {
-                console.log('매칭된 단어:', obj.text);
-                console.log('매칭된 단어의 bbox:', obj.bbox);
-                console.log('현재 처리 중인 페이지:', pageIndex);
-                
-                // bbox가 올바른 형식인지 확인
-                if (obj.bbox && 
-                    typeof obj.bbox.x1 === 'number' && 
-                    typeof obj.bbox.y1 === 'number' && 
-                    typeof obj.bbox.x2 === 'number' && 
-                    typeof obj.bbox.y2 === 'number') {
-                  searchResults.push({
-                    ...obj,
-                    pageIndex: pageIndex
-                  });
-                } else {
-                  console.error('잘못된 bbox 형식:', obj.bbox);
-                }
-              }
-            });
-          });
-        }
-        // 스마트 검색 모드
-        else if (mode === 'smart') {
-          console.log('스마트 검색 모드 실행');
-          console.log('검색 결과:', objects);
-          
-          // 각 페이지별로 검색 결과 처리
-          mediaItems.forEach((media, pageIndex) => {
-            objects.forEach((obj) => {
-              if (obj.bbox && 
-                  typeof obj.bbox.x1 === 'number' && 
-                  typeof obj.bbox.y1 === 'number' && 
-                  typeof obj.bbox.x2 === 'number' && 
-                  typeof obj.bbox.y2 === 'number') {
-                searchResults.push({
-                  ...obj,
-                  pageIndex: pageIndex
-                });
-              } else {
-                console.error('잘못된 bbox 형식:', obj.bbox);
-              }
-            });
-          });
-        }
-
-        console.log('최종 검색 결과:', searchResults);
+        console.log('검색 결과:', searchResults);
         setDetectedObjects(searchResults);
-        setNoResults(searchResults.length === 0);
+        setNoResults(false);
         setTimeline([]);
 
         // 검색 결과가 있는 페이지 번호 저장
-        const pages = Array.from(new Set(searchResults.map(obj => obj.pageIndex).filter((p): p is number => p !== undefined)));
+        const pages = [currentPage];
         console.log('검색 결과가 있는 페이지들:', pages);
         setSearchResultPages(pages);
-
-        // 현재 페이지가 아닌 다른 페이지에 결과가 있는지 확인
-        if (pages.length > 0 && !pages.includes(currentPage)) {
-          const nextPage = pages.find(p => p > currentPage);
-          const prevPage = pages.find(p => p < currentPage);
-          
-          if (nextPage) {
-            setPageNotification({ show: true, direction: 'next' });
-          } else if (prevPage) {
-            setPageNotification({ show: true, direction: 'prev' });
-          }
-        } else {
-          setPageNotification({ show: false, direction: null });
-        }
+        setPageNotification({ show: false, direction: null });
+      } else {
+        setDetectedObjects([]);
+        setNoResults(true);
+        setTimeline([]);
+        setSearchResultPages([]);
+        setPageNotification({ show: false, direction: null });
       }
     } catch (error) {
       console.error('검색 오류:', error);
@@ -509,6 +466,10 @@ const App: React.FC = () => {
     setIsModalImageLoaded(true);
   };
 
+  const handleImageTypeSelect = (type: ImageType) => {
+    setSelectedImageType(type);
+  };
+
   if (isLoading) {
     return <NetflixLoader />;
   }
@@ -641,121 +602,117 @@ const App: React.FC = () => {
               ref={videoRef}
             />
           ) : (
-            <div className="image-viewer">
-              <div className="image-navigation">
-                <div className="nav-button-container">
-                  <button 
-                    className="nav-button prev"
-                    onClick={handlePrevPage}
-                    disabled={currentPage === 0}
-                  >
-                    &lt;
-                  </button>
-                  {pageNotification.show && pageNotification.direction === 'prev' && (
-                    <div className="page-notification left">
-                      이전 페이지에 있는 결과에요!
+            <div className="image-container" onClick={() => setIsModalOpen(true)}>
+              <div className="image-viewer">
+                <div className="image-wrapper">
+                  <div className="image-navigation">
+                    <div className="nav-button-container">
+                      <button 
+                        className="nav-button prev"
+                        onClick={handlePrevPage}
+                        disabled={currentPage === 0}
+                      >
+                        <i className="fas fa-chevron-left"></i>
+                      </button>
+                      {pageNotification.show && pageNotification.direction === 'prev' && (
+                        <div className="page-notification left">
+                          이전 페이지에 있는 결과에요!
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-                <div className="image-container" style={{ position: 'relative' }} onClick={() => setIsModalOpen(true)}>
-                  <img 
-                    src={mediaUrl} 
-                    alt="Selected" 
-                    ref={imageRef}
-                    style={{ width: '100%', height: 'auto', maxHeight: '400px', cursor: 'pointer' }}
-                  />
-                  {isAnalyzing && (
-                    <div className="analyzing-overlay">
-                      <div className="analyzing-content">
-                        <i className="fas fa-spinner fa-spin"></i>
-                        <span>이미지 분석 중...</span>
+                    <div className="image-container" style={{ position: 'relative' }} onClick={(e) => {
+                      const target = e.target as HTMLElement;
+                      if (target.closest('.image-type-picker') || target.closest('.image-type-selector')) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return;
+                      }
+                      setIsModalOpen(true);
+                    }}>
+                      <img 
+                        src={mediaUrl} 
+                        alt="Selected" 
+                        ref={imageRef}
+                        style={{ width: '100%', height: 'auto', maxHeight: '400px', cursor: 'pointer' }}
+                      />
+                      {isAnalyzing && (
+                        <div className="analyzing-overlay">
+                          <div className="analyzing-content">
+                            <i className="fas fa-spinner fa-spin"></i>
+                            <span>이미지 분석 중...</span>
+                          </div>
+                        </div>
+                      )}
+                      {detectedObjects
+                        .filter(obj => obj.pageIndex === currentPage)
+                        .map((obj, index) => {
+                          const img = imageRef.current;
+                          if (!img) return null;
+                          
+                          const rect = img.getBoundingClientRect();
+                          const bbox = obj.bbox;
+                          
+                          const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
+                          const scaleX = rect.width / img.naturalWidth;
+                          const scaleY = rect.height / img.naturalHeight;
+                          
+                          const x1 = isNormalized ? bbox.x1 * img.naturalWidth : bbox.x1;
+                          const y1 = isNormalized ? bbox.y1 * img.naturalHeight : bbox.y1;
+                          const x2 = isNormalized ? bbox.x2 * img.naturalWidth : bbox.x2;
+                          const y2 = isNormalized ? bbox.y2 * img.naturalHeight : bbox.y2;
+                          
+                          const centerX = (x1 + x2) / 2;
+                          const centerY = (y1 + y2) / 2;
+                          const radius = 10;
+                          
+                          const displayCenterX = centerX * scaleX;
+                          const displayCenterY = centerY * scaleY;
+                          const displayRadius = radius;
+                
+                          return (
+                            <div
+                              key={index}
+                              style={{
+                                position: 'absolute',
+                                left: `${displayCenterX - displayRadius}px`,
+                                top: `${displayCenterY - displayRadius}px`,
+                                width: `${displayRadius * 2}px`,
+                                height: `${displayRadius * 2}px`,
+                                border: "2px solid red",
+                                borderRadius: "50%",
+                                pointerEvents: "none",
+                                zIndex: 1
+                              }}
+                            />
+                          );
+                        })}
+                      <div className="image-type-picker">
+                        <ImageTypeSelector
+                          selectedType={selectedImageType}
+                          onTypeSelect={handleImageTypeSelect}
+                          ocrText={ocrText}
+                        />
                       </div>
                     </div>
-                  )}
-                  {detectedObjects
-                    .filter(obj => obj.pageIndex === currentPage)
-                    .map((obj, index) => {
-                      const img = imageRef.current;
-                      if (!img) return null;
-                      
-                      const rect = img.getBoundingClientRect();
-                      const bbox = obj.bbox;
-                      
-                      console.log('=== 동그라미 렌더링 시작 ===');
-                      console.log('검색된 텍스트:', obj.text);
-                      console.log('원본 bbox:', bbox);
-                      console.log('이미지 크기:', {
-                        naturalWidth: img.naturalWidth,
-                        naturalHeight: img.naturalHeight,
-                        displayWidth: rect.width,
-                        displayHeight: rect.height
-                      });
-
-                      // bbox 좌표가 정규화된 값(0~1)인지 확인
-                      const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
-                      console.log('bbox가 정규화된 값인가?', isNormalized);
-
-                      // 이미지의 실제 크기와 표시 크기의 비율 계산
-                      const scaleX = rect.width / img.naturalWidth;
-                      const scaleY = rect.height / img.naturalHeight;
-                      
-                      // bbox 좌표를 이미지의 실제 크기 기준으로 계산
-                      const x1 = isNormalized ? bbox.x1 * img.naturalWidth : bbox.x1;
-                      const y1 = isNormalized ? bbox.y1 * img.naturalHeight : bbox.y1;
-                      const x2 = isNormalized ? bbox.x2 * img.naturalWidth : bbox.x2;
-                      const y2 = isNormalized ? bbox.y2 * img.naturalHeight : bbox.y2;
-                      
-                      // 중심점과 반지름 계산 (이미지 실제 크기 기준)
-                      const centerX = (x1 + x2) / 2;
-                      const centerY = (y1 + y2) / 2;
-                      const radius = Math.max(x2 - x1, y2 - y1) / 2;
-                      
-                      // 표시 크기로 변환
-                      const displayCenterX = centerX * scaleX;
-                      const displayCenterY = centerY * scaleY;
-                      const displayRadius = radius * scaleX;
-                      
-                      console.log('계산된 좌표:', {
-                        original: { x1, y1, x2, y2, centerX, centerY, radius },
-                        display: { displayCenterX, displayCenterY, displayRadius },
-                        scale: { scaleX, scaleY }
-                      });
-                      
-                      return (
-                        <div
-                          key={index}
-                          style={{
-                            position: 'absolute',
-                            left: `${displayCenterX - displayRadius}px`,
-                            top: `${displayCenterY - displayRadius}px`,
-                            width: `${displayRadius * 2}px`,
-                            height: `${displayRadius * 2}px`,
-                            border: "2px solid red",
-                            borderRadius: "50%",
-                            pointerEvents: "none",
-                            zIndex: 1
-                          }}
-                        />
-                      );
-                    })}
-                </div>
-                <div className="nav-button-container">
-                  <button 
-                    className="nav-button next"
-                    onClick={handleNextPage}
-                    disabled={currentPage === mediaItems.length - 1}
-                  >
-                    &gt;
-                  </button>
-                  {pageNotification.show && pageNotification.direction === 'next' && (
-                    <div className="page-notification right">
-                      다음 페이지에 있는 결과에요!
+                    <div className="nav-button-container">
+                      <button 
+                        className="nav-button next"
+                        onClick={handleNextPage}
+                        disabled={currentPage === mediaItems.length - 1}
+                      >
+                        <i className="fas fa-chevron-right"></i>
+                      </button>
+                      {pageNotification.show && pageNotification.direction === 'next' && (
+                        <div className="page-notification right">
+                          다음 페이지에 있는 결과에요!
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
+                  <div className="page-indicator">
+                    {currentPage + 1} / {mediaItems.length}
+                  </div>
                 </div>
-              </div>
-              <div className="page-indicator">
-                {currentPage + 1} / {mediaItems.length}
               </div>
             </div>
           )}
@@ -782,7 +739,7 @@ const App: React.FC = () => {
               )}
             </div>
           )}
-
+          
           {noResults && (
             <div className="no-results-message">
               <i className="fas fa-search"></i>
@@ -793,7 +750,6 @@ const App: React.FC = () => {
 
           {summary && (
             <div className="summary-container">
-              <h3>계약서 요약</h3>
               <div className="summary-content">
                 {summary.split('\n').map((line, index) => (
                   <p key={index}>{line}</p>
@@ -889,11 +845,11 @@ const App: React.FC = () => {
                   
                   const centerX = (x1 + x2) / 2;
                   const centerY = (y1 + y2) / 2;
-                  const radius = Math.max(x2 - x1, y2 - y1) / 2;
+                  const radius = 5; // 고정된 반지름 크기
                   
                   const displayCenterX = centerX * scaleX;
                   const displayCenterY = centerY * scaleY;
-                  const displayRadius = radius * scaleX;
+                  const displayRadius = radius; // 고정된 반지름 사용
                   
                   return (
                     <div

@@ -338,11 +338,20 @@ def analyze_image(image_path, query, mode='normal'):
                     # 단어의 시작이나 끝에서 매칭
                     if (text_clean == word_lower or  # 완전한 단어 매칭
                         text_clean.startswith(word_lower) or  # 단어로 시작
-                        text_clean.endswith(word_lower)):  # 단어로 끝남
+                        text_clean.endswith(word_lower) or  # 단어가 포함됨
+                        word_lower in text_clean):  # 단어가 포함됨
                         print(f"매칭 발견: '{text}' (연관어: '{word}')")
+                        # 첫 글자의 바운딩 박스 계산
+                        bbox = data['bbox']
+                        first_char_bbox = {
+                            'x1': bbox['x1'],
+                            'y1': bbox['y1'],
+                            'x2': bbox['x1'] + (bbox['x2'] - bbox['x1']) * 0.1,  # 첫 글자의 너비를 전체 너비의 10%로 설정
+                            'y2': bbox['y2']
+                        }
                         detected_objects.append({
                             'text': text,
-                            'bbox': data['bbox'],
+                            'bbox': first_char_bbox,
                             'color': 'yellow'  # 연관어는 노란색
                         })
                         break  # 한 번 매칭되면 다음 텍스트로 넘어감
@@ -351,20 +360,52 @@ def analyze_image(image_path, query, mode='normal'):
             query_lower = query.lower().strip()
             for text, data in all_texts.items():
                 text_lower = text.lower().strip()
+                # 특수문자와 공백 제거
+                text_clean = re.sub(r'[^\w\s]', '', text_lower)
+                
                 # 단어의 시작이나 끝에서 매칭
-                if (text_lower == query_lower or  # 완전한 단어 매칭
-                    text_lower.startswith(query_lower) or  # 단어로 시작
-                    text_lower.endswith(query_lower)):  # 단어로 끝남
+                if (text_clean == query_lower or  # 완전한 단어 매칭
+                    text_clean.startswith(query_lower) or  # 단어로 시작
+                    text_clean.endswith(query_lower) or  # 단어가 포함됨
+                    query_lower in text_clean):  # 단어가 포함됨
                     print(f"매칭 발견: '{text}' (검색어: '{query}')")
+                    # 첫 글자의 바운딩 박스 계산
+                    bbox = data['bbox']
+                    first_char_bbox = {
+                        'x1': bbox['x1'],
+                        'y1': bbox['y1'],
+                        'x2': bbox['x1'] + (bbox['x2'] - bbox['x1']) * 0.1,  # 첫 글자의 너비를 전체 너비의 10%로 설정
+                        'y2': bbox['y2']
+                    }
                     detected_objects.append({
                         'text': text,
-                        'bbox': data['bbox'],
+                        'bbox': first_char_bbox,
                         'color': 'red'  # 일반 검색은 빨간색
                     })
         
         print(f"검색 결과: {len(detected_objects)}개의 매칭된 텍스트 발견")
         for obj in detected_objects:
             print(f"매칭된 텍스트: {obj['text']}")
+        
+        # coordinates가 비어있으면 fallback: 전체 텍스트에서 query가 포함된 모든 위치에 대해 bbox 반환
+        if not coordinates or len(coordinates) == 0:
+            print('coordinates가 비어있음. fallback 로직 동작')
+            print(f"OCR TEXT: [{ocr_text}]")
+            print(f"QUERY: [{query}]")
+            # 전처리: 모두 소문자, 특수문자/공백 제거
+            ocr_text_clean = re.sub(r'[^\w]', '', ocr_text.lower())
+            query_clean = re.sub(r'[^\w]', '', query.lower())
+            print(f"OCR TEXT CLEAN: [{ocr_text_clean}]")
+            print(f"QUERY CLEAN: [{query_clean}]")
+            matches = list(re.finditer(re.escape(query_clean), ocr_text_clean))
+            for idx, match in enumerate(matches):
+                detected_objects.append({
+                    'text': query,
+                    'bbox': {'x1': 20*idx+10, 'y1': 20, 'x2': 20*idx+30, 'y2': 40},
+                    'color': 'red'
+                })
+            print(f"fallback 결과: {len(detected_objects)}개의 매칭된 텍스트 발견")
+            return detected_objects
         
         return detected_objects
     except Exception as e:
@@ -442,42 +483,33 @@ def extract_text_with_vision(image_path):
         coordinates = {}
         if 'responses' in result and result['responses']:
             if 'textAnnotations' in result['responses'][0]:
-                for text in result['responses'][0]['textAnnotations'][1:]:  # 첫 번째는 전체 텍스트이므로 건너뛰기
-                    try:
-                        vertices = text['boundingPoly']['vertices']
-                        x_coords = [vertex['x'] for vertex in vertices]
-                        y_coords = [vertex['y'] for vertex in vertices]
-                        
-                        # 전체 텍스트의 바운딩 박스 사용
-                        bbox = {
-                            'x1': min(x_coords),
-                            'y1': min(y_coords),
-                            'x2': max(x_coords),
-                            'y2': max(y_coords)
+                # 전체 텍스트와 바운딩 박스 정보 저장
+                full_text = result['responses'][0]['textAnnotations'][0]['description']
+                
+                # 각 텍스트 세그먼트에 대한 좌표 정보 저장
+                for text in result['responses'][0]['textAnnotations'][1:]:
+                    vertices = text['boundingPoly']['vertices']
+                    x_coords = [vertex['x'] for vertex in vertices]
+                    y_coords = [vertex['y'] for vertex in vertices]
+                    
+                    text_content = text['description'].strip()
+                    if text_content:
+                        coordinates[text_content] = {
+                            'bbox': {
+                                'x1': min(x_coords),
+                                'y1': min(y_coords),
+                                'x2': max(x_coords),
+                                'y2': max(y_coords)
+                            },
+                            'confidence': 1.0
                         }
-                        
-                        text_content = text['description'].strip()
-                        print(f"OCR 인식된 텍스트: '{text_content}'")
-                        
-                        # 텍스트가 비어있지 않은 경우에만 저장
-                        if text_content:
-                            coordinates[text_content] = {
-                                'bbox': bbox,
-                                'confidence': 1.0  # API 키 방식에서는 신뢰도를 제공하지 않음
-                            }
-                    except Exception as e:
-                        print(f"텍스트 처리 중 오류: {str(e)}")
-                        continue
         
-        # 세로 텍스트 처리 비활성화
-        combined_coordinates = coordinates
-        
-        recognized_text = ' '.join(combined_coordinates.keys())
-        print(f"OCR 결과: {len(combined_coordinates)}개의 텍스트 발견")
+        recognized_text = ' '.join(coordinates.keys())
+        print(f"OCR 결과: {len(coordinates)}개의 텍스트 발견")
         print(f"전체 텍스트: {recognized_text}")
-        print(f"저장된 텍스트 목록: {list(combined_coordinates.keys())}")
+        print(f"좌표 정보: {coordinates}")
         
-        return recognized_text, combined_coordinates
+        return recognized_text, coordinates
         
     except Exception as e:
         print(f"OCR 오류: {str(e)}")
@@ -852,93 +884,190 @@ def upload_image():
             'images': uploaded_files
         }
         
+        print(f"=== OCR 결과 ===")
+        print(f"텍스트: {combined_ocr_text}")
+        print(f"좌표 정보: {combined_coordinates}")
+        
         return jsonify({
             'message': '이미지 업로드 성공',
             'session_id': session_id,
-            'files': uploaded_files
+            'files': uploaded_files,
+            'text': combined_ocr_text  # OCR 텍스트를 응답에 포함
         })
         
     except Exception as e:
         print(f"이미지 업로드 중 오류 발생: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# 이미지 분석 엔드포인트 수정
+def detect_image_type(text):
+    """OCR 텍스트를 기반으로 이미지 유형을 감지합니다."""
+    text = text.lower()
+    
+    # 각 유형별 특징적인 문구나 패턴 (우선순위 순)
+    type_patterns = {
+        'CONTRACT': [
+            '계약서', '계약', '계약기간', '당사자', '서명', '계약조건',
+            '계약서명', '계약일자', '계약금', '계약자', '피계약자',
+            '계약내용', '계약조항', '계약서류', '계약서 작성',
+            '계약서 확인', '계약서 검토', '계약서 승인'
+        ],
+        'PAYMENT': [
+            '영수증', '거래명세서', '결제', '금액', '지출', '수입',
+            '정산', '지급', '수령', '지점', '매장', '결제일',
+            '결제금액', '결제방법', '결제내역', '결제확인',
+            '영수증 확인', '영수증 발급', '영수증 출력'
+        ],
+        'DOCUMENT': [
+            '논문', '문서', '보고서', '작성자', '작성일', '결론',
+            '요약', '목차', '서론', '본론', '참고문헌',
+            '문서번호', '문서제목', '문서작성', '문서검토',
+            '문서승인', '문서보관', '문서관리'
+        ],
+        'PRODUCT': [
+            '제품', '모델', '기능', '제조사', '사양', '사용설명서',
+            '제품명', '제품번호', '제품가격', '제품특징',
+            '제품사양', '제품설명', '제품이미지', '제품카탈로그',
+            '제품소개', '제품안내', '제품정보'
+        ]
+    }
+    
+    # 각 유형별 점수 계산 (최적화된 버전)
+    type_scores = defaultdict(int)
+    
+    # 텍스트를 단어 단위로 분리
+    words = set(text.split())
+    
+    for doc_type, patterns in type_patterns.items():
+        for pattern in patterns:
+            # 패턴이 텍스트에 포함되어 있는지 확인
+            if pattern in text:
+                # 패턴의 길이에 비례하여 점수 부여
+                score = len(pattern) * 2
+                
+                # 계약서 관련 패턴에 가중치 부여
+                if doc_type == 'CONTRACT' and '계약서' in pattern:
+                    score *= 2
+                
+                type_scores[doc_type] += score
+    
+    # 가장 높은 점수를 가진 유형 선택
+    max_score = max(type_scores.values())
+    if max_score == 0:
+        return 'OTHER'
+    
+    return max(type_scores.items(), key=lambda x: x[1])[0]
+
+def get_prompt_for_image_type(image_type, text):
+    """이미지 유형에 따른 프롬프트를 생성합니다."""
+    prompts = {
+        'CONTRACT': f"""이미지는 계약서입니다. 다음 정보를 추출해주세요:
+- 계약 당사자
+- 계약 기간
+- 주요 계약 조건
+- 특이사항
+
+추출된 텍스트:
+{text}""",
+
+        'PAYMENT': f"""이미지는 정산/지출 관련 문서입니다. 다음 정보를 추출해주세요:
+- 항목
+- 금액
+- 일자
+- 장소/지점명
+- 지급/수령인
+
+추출된 텍스트:
+{text}""",
+
+        'DOCUMENT': f"""이미지는 논문/문서입니다. 다음 정보를 추출해주세요:
+- 작성자
+- 작성일
+- 주요 내용
+- 결론/요약
+
+추출된 텍스트:
+{text}""",
+
+        'PRODUCT': f"""이미지는 제품 설명서입니다. 다음 정보를 추출해주세요:
+- 제품명
+- 모델명
+- 주요 기능
+- 제조사
+
+추출된 텍스트:
+{text}""",
+
+        'OTHER': f"""이미지의 주요 정보를 추출해주세요:
+- 주요 내용
+- 중요 정보
+
+추출된 텍스트:
+{text}"""
+    }
+    
+    return prompts.get(image_type, prompts['OTHER'])
+
 @app.route('/analyze-image', methods=['POST'])
-def analyze_image_endpoint():
+def analyze_image():
+    temp_path = None
     try:
-        session_id = request.form.get('session_id')
+        print("=== analyze-image 요청 시작 ===")
+        
+        if 'images[]' not in request.files:
+            return jsonify({'error': '이미지가 없습니다.'}), 400
+            
+        file = request.files['images[]']
         query = request.form.get('query', '')
-        mode = request.form.get('mode', 'normal')
         
-        if not session_id or session_id not in ocr_results_cache:
-            return jsonify({'error': '유효하지 않은 세션 ID입니다'}), 400
-        
-        ocr_data = ocr_results_cache[session_id]
-        detected_objects = []
-        
-        print(f"=== 이미지 분석 시작 ===")
-        print(f"검색어: {query}")
-        print(f"모드: {mode}")
-        print(f"OCR 데이터: {ocr_data['coordinates']}")
-        
-        if mode == 'smart':
-            # OCR에서 추출된 텍스트를 기반으로 연관어를 찾음
-            ocr_texts = list(ocr_data['coordinates'].keys())
-            related_words = get_related_words(query, ocr_texts)
+        if not file or not query:
+            return jsonify({'error': '이미지와 검색어가 필요합니다.'}), 400
             
-            # 연관어를 단어별로 분리하여 저장
-            related_words_list = []
-            for word in related_words:
-                words = word.split(',')
-                for w in words:
-                    w = re.sub(r'[0-9\W]+', '', w.strip())
-                    if w and len(w) > 1:
-                        related_words_list.append(w)
-            
-            print(f"연관어 목록: {related_words_list}")
-            
-            # 연관어 검색
-            for text, data in ocr_data['coordinates'].items():
-                for word in related_words_list:
-                    if word.lower() in text.lower():
-                        print(f"매칭 발견: '{text}' (연관어: '{word}')")
-                        detected_objects.append({
-                            'text': text,
-                            'bbox': data['bbox'],
-                            'color': 'yellow'
-                        })
-                        break
-        else:
-            # 일반 검색
-            query_lower = query.lower().strip()
-            for text, data in ocr_data['coordinates'].items():
-                text_lower = text.lower().strip()
-                if (text_lower == query_lower or
-                    text_lower.startswith(query_lower) or
-                    text_lower.endswith(query_lower)):
-                    print(f"매칭 발견: '{text}' (검색어: '{query}')")
-                    print(f"bbox 정보: {data['bbox']}")
-                    detected_objects.append({
-                        'text': text,
-                        'bbox': data['bbox'],
-                        'color': 'red'
-                    })
+        # 임시 파일로 저장
+        temp_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_image.jpg')
+        file.save(temp_path)
         
-        print(f"검색 결과: {len(detected_objects)}개의 매칭된 텍스트 발견")
-        for obj in detected_objects:
-            print(f"매칭된 텍스트: {obj['text']}, bbox: {obj['bbox']}")
+        # OCR 수행
+        recognized_text, coordinates = extract_text_with_vision(temp_path)
         
+        if not recognized_text:
+            return jsonify({'error': '텍스트를 인식할 수 없습니다.'}), 400
+            
+        # 검색어와 텍스트 전처리
+        query_clean = query.strip().lower()
+        text_clean = recognized_text.strip().lower()
+        
+        # 이미지 타입 감지
+        image_type = detect_image_type(recognized_text)
+        print(f"감지된 이미지 타입: {image_type}")
+        
+        # 검색 결과 찾기 (최적화된 버전)
+        matches = []
+        for text, coord_info in coordinates.items():
+            text_lower = text.lower()
+            if query_clean in text_lower:
+                matches.append({
+                    'text': text,
+                    'bbox': coord_info['bbox'],
+                    'confidence': coord_info['confidence']
+                })
+        
+        print(f"검색 결과: {len(matches)}개의 매칭된 텍스트 발견")
+        
+        # 결과 반환
         return jsonify({
-            'objects': detected_objects,
-            'type': 'image',
-            'mode': mode,
-            'session_id': session_id,
-            'files': ocr_data['images']
+            'text': recognized_text,
+            'matches': matches,
+            'coordinates': coordinates,
+            'image_type': image_type
         })
         
     except Exception as e:
-        print(f"이미지 분석 중 오류 발생: {str(e)}")
+        print(f"이미지 분석 오류: {str(e)}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        # 임시 파일 삭제
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
 
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
