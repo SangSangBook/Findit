@@ -40,8 +40,24 @@ VISION_API_URL = f'https://vision.googleapis.com/v1/images:annotate?key={API_KEY
 # 연관어 캐시
 related_words_cache = {}
 
+# OpenAI 클라이언트 초기화
 client = OpenAI()  # 환경 변수에서 자동으로 API 키를 가져옴
+
+# Google Maps 클라이언트 초기화
 gmaps = googlemaps.Client(key=os.getenv('GOOGLE_CLOUD_VISION_API_KEY'))
+
+# Google Cloud Vision 클라이언트 초기화
+try:
+    credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+    if credentials_path and os.path.exists(credentials_path):
+        credentials = service_account.Credentials.from_service_account_file(credentials_path)
+        vision_client = vision.ImageAnnotatorClient(credentials=credentials)
+    else:
+        vision_client = vision.ImageAnnotatorClient()
+    print("Google Cloud Vision 클라이언트가 성공적으로 초기화되었습니다.")
+except Exception as e:
+    print(f"Google Cloud Vision 클라이언트 초기화 오류: {str(e)}")
+    vision_client = None
 
 # OCR 결과를 저장할 전역 변수
 ocr_results_cache = {}
@@ -337,22 +353,13 @@ def parse_gpt_response(response):
     return boxes
 
 def extract_text_with_vision(image_path):
-    """Google Cloud Vision API를 사용하여 텍스트 추출"""
     try:
-        print(f"OCR 시작: {image_path}")
-        
-        # 이미지 파일 존재 확인
         if not os.path.exists(image_path):
-            print(f"이미지 파일이 존재하지 않습니다: {image_path}")
-            return "", {}
-            
-        # 이미지 읽기
-        try:
-            with open(image_path, 'rb') as image_file:
-                content = base64.b64encode(image_file.read()).decode('utf-8')
-        except Exception as e:
-            print(f"이미지 파일 읽기 오류: {str(e)}")
-            return "", {}
+            raise FileNotFoundError(f"Image file not found: {image_path}")
+
+        # Vision API 클라이언트를 직접 사용하는 대신 HTTP 요청 사용
+        with open(image_path, 'rb') as image_file:
+            content = base64.b64encode(image_file.read()).decode('utf-8')
         
         # API 요청 데이터 준비
         request_data = {
@@ -371,57 +378,89 @@ def extract_text_with_vision(image_path):
         }
         
         # API 호출
-        try:
-            response = requests.post(VISION_API_URL, json=request_data)
-            response.raise_for_status()
-            result = response.json()
-        except Exception as e:
-            print(f"Google Vision API 호출 오류: {str(e)}")
-            return "", {}
+        response = requests.post(VISION_API_URL, json=request_data)
+        response.raise_for_status()
+        result = response.json()
         
-        # 이미지 크기 가져오기
-        img = cv2.imread(image_path)
-        if img is None:
-            print(f"이미지를 읽을 수 없습니다: {image_path}")
-            return "", {}
+        if 'responses' not in result or not result['responses'] or 'textAnnotations' not in result['responses'][0]:
+            return []
         
-        img_height, img_width = img.shape[:2]
+        texts = result['responses'][0]['textAnnotations']
         
-        coordinates = {}
-        if 'responses' in result and result['responses']:
-            if 'textAnnotations' in result['responses'][0]:
-                # 전체 텍스트와 바운딩 박스 정보 저장
-                full_text = result['responses'][0]['textAnnotations'][0]['description']
-                
-                # 각 텍스트 세그먼트에 대한 좌표 정보 저장
-                for text in result['responses'][0]['textAnnotations'][1:]:
-                    vertices = text['boundingPoly']['vertices']
-                    x_coords = [vertex['x'] for vertex in vertices]
-                    y_coords = [vertex['y'] for vertex in vertices]
-                    
-                    text_content = text['description'].strip()
-                    if text_content:
-                        # 좌표를 0~1 사이의 값으로 정규화
-                        coordinates[text_content] = {
-                            'bbox': {
-                                'x1': min(x_coords) / img_width,  # 왼쪽
-                                'y1': min(y_coords) / img_height,  # 위
-                                'x2': max(x_coords) / img_width,  # 오른쪽
-                                'y2': max(y_coords) / img_height   # 아래
-                            },
-                            'confidence': 1.0
-                        }
+        # 전체 텍스트와 좌표 정보 저장
+        text_blocks = []
+        img = Image.open(image_path)
+        width, height = img.size
         
-        recognized_text = ' '.join(coordinates.keys())
-        print(f"OCR 결과: {len(coordinates)}개의 텍스트 발견")
-        print(f"전체 텍스트: {recognized_text}")
-        print(f"좌표 정보: {coordinates}")
+        # 첫 번째 텍스트는 전체 텍스트이므로 건너뜀
+        for text in texts[1:]:
+            vertices = text['boundingPoly']['vertices']
+            x_coords = [vertex.get('x', 0) for vertex in vertices]
+            y_coords = [vertex.get('y', 0) for vertex in vertices]
+            
+            x1 = min(x_coords)
+            y1 = min(y_coords)
+            x2 = max(x_coords)
+            y2 = max(y_coords)
+            
+            normalized_bbox = {
+                'x1': x1 / width,
+                'y1': y1 / height,
+                'x2': x2 / width,
+                'y2': y2 / height
+            }
+            
+            text_blocks.append({
+                'text': text['description'],
+                'bbox': normalized_bbox,
+                'abs_x1': x1,
+                'abs_x2': x2,
+                'abs_y1': y1,
+                'abs_y2': y2
+            })
+
+        # y좌표로 정렬해서 같은 줄에 있는 단어들을 모음
+        # 매우 가까운 y좌표는 동일한 줄로 간주
+        y_threshold = 0.02  # 이미지 높이의 2%
         
-        return recognized_text, coordinates
+        # y좌표 기준으로 먼저 그룹화
+        y_groups = {}
+        for block in text_blocks:
+            y_val = round(block['bbox']['y1'] / y_threshold) * y_threshold
+            if y_val not in y_groups:
+                y_groups[y_val] = []
+            y_groups[y_val].append(block)
         
+        # 각 y_group 내에서 x좌표 순서대로 정렬
+        combined_blocks = []
+        for y_val, blocks in sorted(y_groups.items()):
+            # x좌표 기준 정렬
+            blocks.sort(key=lambda b: b['bbox']['x1'])
+            
+            # 모든 텍스트를 정규화된 띄어쓰기로 결합
+            # 각 단어 사이의 실제 간격과 상관없이 한 칸 띄우기
+            line_text = " ".join([b['text'] for b in blocks])
+            
+            # 단어들의 전체 bounding box 계산
+            min_x1 = min(b['bbox']['x1'] for b in blocks)
+            min_y1 = min(b['bbox']['y1'] for b in blocks)
+            max_x2 = max(b['bbox']['x2'] for b in blocks)
+            max_y2 = max(b['bbox']['y2'] for b in blocks)
+            
+            combined_blocks.append({
+                'text': line_text,
+                'bbox': {
+                    'x1': min_x1,
+                    'y1': min_y1,
+                    'x2': max_x2,
+                    'y2': max_y2
+                }
+            })
+        
+        return combined_blocks
     except Exception as e:
-        print(f"OCR 오류: {str(e)}")
-        return "", {}
+        print(f"Error in extract_text_with_vision: {str(e)}")
+        return []
 
 def combine_vertical_texts(coordinates):
     """세로로 정렬된 텍스트들을 하나의 텍스트로 결합"""
@@ -632,20 +671,23 @@ def process_video(video_path, query, mode='normal'):
             cv2.imwrite(temp_frame_path, frame)
             
             try:
-                # OCR 실행 (Google Cloud Vision API 사용)
-                ocr_text, coordinates = extract_text_with_vision(temp_frame_path)
+                # OCR 실행 (수정된 함수 사용)
+                text_blocks = extract_text_with_vision(temp_frame_path)
                 
-                if coordinates:
+                if text_blocks:
                     detected_texts = []
-                    for text, data in coordinates.items():
+                    for block in text_blocks:
+                        text = block['text']
+                        bbox = block['bbox']
+                        
                         if mode == 'smart':
                             # 연관어 검색
                             for word in related_words:
                                 if word.lower() in text.lower():
                                     detected_texts.append({
                                         'text': text,
-                                        'confidence': data['confidence'],
-                                        'bbox': data['bbox'],
+                                        'bbox': bbox,
+                                        'confidence': 1.0,  # 기본값 설정
                                         'color': 'yellow'  # 연관어는 노란색
                                     })
                                     break
@@ -654,8 +696,8 @@ def process_video(video_path, query, mode='normal'):
                             if query.lower() in text.lower():
                                 detected_texts.append({
                                     'text': text,
-                                    'confidence': data['confidence'],
-                                    'bbox': data['bbox'],
+                                    'bbox': bbox,
+                                    'confidence': 1.0,  # 기본값 설정
                                     'color': 'red'  # 일반 검색은 빨간색
                                 })
                     
@@ -996,39 +1038,26 @@ def analyze_image():
         temp_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_image.jpg')
         file.save(temp_path)
         
-        # OCR 수행
-        recognized_text, coordinates = extract_text_with_vision(temp_path)
+        # OCR 수행 (이제 리스트 반환)
+        text_blocks = extract_text_with_vision(temp_path)
         
-        if not recognized_text:
+        if not text_blocks:
             return jsonify({'error': '텍스트를 인식할 수 없습니다.'}), 400
-            
-        # 검색어와 텍스트 전처리
-        query_clean = query.strip().lower()
         
-        # 검색 결과 찾기 (최적화된 버전)
-        matches = []
-        for text, coord_info in coordinates.items():
-            if query_clean in text.lower():
-                matches.append({
-                    'text': text,
-                    'bbox': coord_info['bbox'],
-                    'confidence': coord_info['confidence']
-                })
+        # 검색어가 포함된 블록만 필터링
+        query_clean = query.strip().lower()
+        matches = [block for block in text_blocks if query_clean in block['text'].lower()]
         
         print(f"검색 결과: {len(matches)}개의 매칭된 텍스트 발견")
         
-        # 결과 반환
         return jsonify({
-            'text': recognized_text,
             'matches': matches,
-            'coordinates': coordinates
+            'text': '\n'.join([block['text'] for block in text_blocks])
         })
-        
     except Exception as e:
         print(f"이미지 분석 오류: {str(e)}")
         return jsonify({'error': str(e)}), 500
     finally:
-        # 임시 파일 삭제
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
