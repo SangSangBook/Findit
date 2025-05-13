@@ -340,7 +340,6 @@ body::after {
   display: flex;
   justify-content: center;
   align-items: center;
-  overflow: hidden;
   background-color: #f5f5f5;
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -1350,8 +1349,8 @@ body {
   display: none;
   position: absolute;
   bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
+  right: 0;
+  transform: translateY(-8px);
   background-color: white;
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
@@ -1360,10 +1359,23 @@ body {
   flex-direction: column;
   gap: 8px;
   min-width: 200px;
+  margin-bottom: 8px;
 }
 
 .image-type-selector.show {
   display: flex;
+}
+
+.image-type-selector::after {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  right: 20px;
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-top: 8px solid white;
 }
 
 .image-type-selector .type-button {
