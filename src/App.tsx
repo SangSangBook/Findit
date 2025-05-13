@@ -120,8 +120,10 @@ const App: React.FC = () => {
       console.log('=== 서버 응답 데이터 ===');
       console.log('업로드 성공:', data);
 
-      // 세션 ID 저장
-      setSessionId(data.session_id);
+      // 세션 ID 저장 (이미 있는 경우 유지)
+      if (!sessionId) {
+        setSessionId(data.session_id);
+      }
 
       // OCR 텍스트 저장
       if (data.text) {
@@ -144,7 +146,7 @@ const App: React.FC = () => {
           type,
           url,
           file,
-          sessionId: data.session_id,
+          sessionId: sessionId || data.session_id, // 기존 세션 ID 사용
           imageType: data.image_type as ImageType
         };
       });
@@ -316,9 +318,35 @@ const App: React.FC = () => {
     if (!chatMessage.trim() || !sessionId) return;
     
     try {
+      console.log('=== 채팅 요청 시작 ===');
+      console.log('세션 ID:', sessionId);
+      console.log('질문:', chatMessage);
+      
       const formData = new FormData();
       formData.append('session_id', sessionId);
       formData.append('message', chatMessage);
+      
+      // 모든 이미지 파일 추가 (현재 선택된 이미지와 관계없이)
+      const imageFiles = mediaItems
+        .filter(item => item.type === 'image')
+        .map(item => item.file);
+      
+      console.log('전송할 이미지 개수:', imageFiles.length);
+      
+      // 모든 이미지 파일을 순서대로 추가하고 각 이미지의 타입 정보도 함께 전송
+      imageFiles.forEach((file, index) => {
+        const mediaItem = mediaItems.find(item => item.file === file);
+        console.log(`이미지 ${index + 1} 추가:`, file.name, '타입:', mediaItem?.imageType);
+        formData.append('images', file);
+        if (mediaItem?.imageType) {
+          formData.append(`image_types[${index}]`, mediaItem.imageType);
+        }
+      });
+      
+      console.log('FormData 내용:');
+      Array.from(formData.entries()).forEach(([key, value]) => {
+        console.log(key, value);
+      });
       
       const response = await fetch('http://localhost:5001/summarize', {
         method: 'POST',
@@ -326,12 +354,24 @@ const App: React.FC = () => {
       });
       
       if (!response.ok) {
-        throw new Error('채팅 처리 중 오류가 발생했습니다.');
+        const errorData = await response.json();
+        throw new Error(errorData.error || '채팅 처리 중 오류가 발생했습니다.');
       }
       
       const data = await response.json();
-      setChatResponse(data.summary);
-      setChatMessage(''); // Clear the input after sending
+      console.log('서버 응답:', data);
+      
+      // 응답이 배열인 경우 각 이미지에 대한 설명을 순서대로 표시
+      if (Array.isArray(data.summary)) {
+        const formattedResponse = data.summary.map((summary: string, index: number) => {
+          const mediaItem = mediaItems[index];
+          const imageType = mediaItem?.imageType || '알 수 없음';
+          return `${index + 1}번째 이미지 (${imageType}):\n${summary}\n`;
+        }).join('\n');
+        setChatResponse(formattedResponse);
+      } else {
+        setChatResponse(data.summary);
+      }
     } catch (error) {
       console.error('채팅 처리 중 오류:', error);
       alert('채팅 처리 중 오류가 발생했습니다.');
@@ -466,9 +506,7 @@ const App: React.FC = () => {
       setSelectedMedia(prevMedia);
       setMediaType(prevMedia.type);
       setMediaUrl(prevMedia.url);
-      setDetectedObjects([]);
-      setTimeline([]);
-      setOcrText('');
+      // 검색 결과는 유지
       if (prevMedia.imageType) {
         setSelectedImageType(prevMedia.imageType);
       }
@@ -482,9 +520,7 @@ const App: React.FC = () => {
       setSelectedMedia(nextMedia);
       setMediaType(nextMedia.type);
       setMediaUrl(nextMedia.url);
-      setDetectedObjects([]);
-      setTimeline([]);
-      setOcrText('');
+      // 검색 결과는 유지
       if (nextMedia.imageType) {
         setSelectedImageType(nextMedia.imageType);
       }
@@ -661,13 +697,24 @@ const App: React.FC = () => {
                       e.stopPropagation();
                       return;
                     }
-                    setIsModalOpen(true);
                   }}>
                     <img 
                       src={mediaUrl} 
                       alt="Selected" 
                       ref={imageRef}
+                      className={detectedObjects.length > 0 ? 'has-results' : ''}
                     />
+                    {detectedObjects.length > 0 && (
+                      <div className="preview-overlay">
+                        <button 
+                          className="view-results-button"
+                          onClick={() => setIsModalOpen(true)}
+                        >
+                          <i className="fas fa-search"></i>
+                          결과 보기
+                        </button>
+                      </div>
+                    )}
                     {isAnalyzing && (
                       <div className="analyzing-overlay">
                         <div className="analyzing-content">
@@ -685,6 +732,17 @@ const App: React.FC = () => {
                         const rect = img.getBoundingClientRect();
                         const bbox = obj.bbox;
                         
+                        // 디버깅을 위한 로그 추가
+                        console.log('=== 좌표 디버깅 ===');
+                        console.log('텍스트:', obj.text);
+                        console.log('원본 bbox:', bbox);
+                        console.log('이미지 크기:', {
+                            naturalWidth: img.naturalWidth,
+                            naturalHeight: img.naturalHeight,
+                            displayWidth: rect.width,
+                            displayHeight: rect.height
+                        });
+                        
                         const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
                         const scaleX = rect.width / img.naturalWidth;
                         const scaleY = rect.height / img.naturalHeight;
@@ -694,27 +752,40 @@ const App: React.FC = () => {
                         const x2 = isNormalized ? bbox.x2 * img.naturalWidth : bbox.x2;
                         const y2 = isNormalized ? bbox.y2 * img.naturalHeight : bbox.y2;
                         
+                        // 텍스트의 중심점 계산
                         const centerX = (x1 + x2) / 2;
                         const centerY = (y1 + y2) / 2;
-                        const radius = 10;
                         
-                        const displayCenterX = centerX * scaleX;
-                        const displayCenterY = centerY * scaleY;
-                        const displayRadius = radius;
-              
+                        const displayX = centerX * scaleX;
+                        const displayY = centerY * scaleY;
+                        
+                        // 텍스트 크기에 비례하여 동그라미 크기 계산
+                        const textWidth = (x2 - x1) * scaleX;
+                        const textHeight = (y2 - y1) * scaleY;
+                        const radius = Math.max(textWidth, textHeight) * 0.3; // 텍스트 크기의 30%로 설정
+                        
+                        console.log('계산된 좌표:', {
+                            displayX,
+                            displayY,
+                            radius,
+                            textWidth,
+                            textHeight
+                        });
+                        
                         return (
                           <div
                             key={index}
                             style={{
                               position: 'absolute',
-                              left: `${displayCenterX - displayRadius}px`,
-                              top: `${displayCenterY - displayRadius}px`,
-                              width: `${displayRadius * 2}px`,
-                              height: `${displayRadius * 2}px`,
-                              border: "2px solid red",
-                              borderRadius: "50%",
-                              pointerEvents: "none",
-                              zIndex: 1
+                              left: `${displayX - radius}px`,
+                              top: `${displayY - radius}px`,
+                              width: `${radius * 2}px`,
+                              height: `${radius * 2}px`,
+                              borderRadius: '50%',
+                              border: `2px solid ${obj.color || 'red'}`,
+                              backgroundColor: 'transparent',
+                              pointerEvents: 'none',
+                              zIndex: 1000
                             }}
                           />
                         );
@@ -760,13 +831,17 @@ const App: React.FC = () => {
                   placeholder="질문을 입력하세요..."
                   className="chat-input"
                 />
-                <button onClick={handleChat} className="chat-button">
+                <button 
+                  onClick={handleChat} 
+                  className="chat-button"
+                  disabled={mediaItems.filter(item => item.type === 'image').length === 0}
+                >
                   정보 가져오기
                 </button>
               </div>
               {chatResponse && (
                 <div className="chat-response">
-                  <p>{chatResponse}</p>
+                  <p style={{ whiteSpace: 'pre-line' }}>{chatResponse}</p>
                 </div>
               )}
             </div>
@@ -848,6 +923,7 @@ const App: React.FC = () => {
       {isModalOpen && selectedMedia && selectedMedia.type === 'image' && (
         <div className="image-modal" onClick={() => {
           setIsModalOpen(false);
+          setIsModalImageLoaded(false); // 모달 닫을 때 로딩 상태 초기화
           // 모달이 닫힐 때 이미지 크기 복원
           if (imageRef.current) {
             imageRef.current.style.width = '100%';
@@ -858,6 +934,7 @@ const App: React.FC = () => {
           <div className="modal-content" onClick={e => e.stopPropagation()}>
             <button className="modal-close" onClick={() => {
               setIsModalOpen(false);
+              setIsModalImageLoaded(false); // 모달 닫을 때 로딩 상태 초기화
               // 모달이 닫힐 때 이미지 크기 복원
               if (imageRef.current) {
                 imageRef.current.style.width = '100%';
@@ -872,7 +949,17 @@ const App: React.FC = () => {
                 alt="Full size" 
                 style={{ width: '100%', height: 'auto' }}
                 onLoad={handleModalImageLoad}
+                loading="eager"
+                decoding="async"
               />
+              {!isModalImageLoaded && (
+                <div className="modal-loading-overlay">
+                  <div className="modal-loading-content">
+                    <div className="loading-spinner"></div>
+                    <span>검색 결과 로딩 중...</span>
+                  </div>
+                </div>
+              )}
               {isModalImageLoaded && detectedObjects
                 .filter(obj => obj.pageIndex === currentPage)
                 .map((obj, index) => {
@@ -893,22 +980,25 @@ const App: React.FC = () => {
                   
                   const centerX = (x1 + x2) / 2;
                   const centerY = (y1 + y2) / 2;
-                  const radius = 5; // 고정된 반지름 크기
+                  
+                  // 텍스트 크기에 비례하여 동그라미 크기 계산 (2배 크기)
+                  const textWidth = (x2 - x1) * scaleX;
+                  const textHeight = (y2 - y1) * scaleY;
+                  const radius = Math.max(textWidth, textHeight) * 0.6; // 텍스트 크기의 60%로 설정
                   
                   const displayCenterX = centerX * scaleX;
                   const displayCenterY = centerY * scaleY;
-                  const displayRadius = radius; // 고정된 반지름 사용
                   
                   return (
                     <div
                       key={index}
                       style={{
                         position: 'absolute',
-                        left: `${displayCenterX - displayRadius}px`,
-                        top: `${displayCenterY - displayRadius}px`,
-                        width: `${displayRadius * 2}px`,
-                        height: `${displayRadius * 2}px`,
-                        border: "2px solid red",
+                        left: `${displayCenterX - radius}px`,
+                        top: `${displayCenterY - radius}px`,
+                        width: `${radius * 2}px`,
+                        height: `${radius * 2}px`,
+                        border: `2px solid ${obj.color || 'red'}`,
                         borderRadius: "50%",
                         pointerEvents: "none",
                         zIndex: 1

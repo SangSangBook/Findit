@@ -379,6 +379,14 @@ def extract_text_with_vision(image_path):
             print(f"Google Vision API 호출 오류: {str(e)}")
             return "", {}
         
+        # 이미지 크기 가져오기
+        img = cv2.imread(image_path)
+        if img is None:
+            print(f"이미지를 읽을 수 없습니다: {image_path}")
+            return "", {}
+        
+        img_height, img_width = img.shape[:2]
+        
         coordinates = {}
         if 'responses' in result and result['responses']:
             if 'textAnnotations' in result['responses'][0]:
@@ -393,12 +401,13 @@ def extract_text_with_vision(image_path):
                     
                     text_content = text['description'].strip()
                     if text_content:
+                        # 좌표를 0~1 사이의 값으로 정규화
                         coordinates[text_content] = {
                             'bbox': {
-                                'x1': x_coords[0],
-                                'y1': y_coords[0],
-                                'x2': x_coords[2],
-                                'y2': y_coords[2]
+                                'x1': min(x_coords) / img_width,  # 왼쪽
+                                'y1': min(y_coords) / img_height,  # 위
+                                'x2': max(x_coords) / img_width,  # 오른쪽
+                                'y2': max(y_coords) / img_height   # 아래
                             },
                             'confidence': 1.0
                         }
@@ -734,6 +743,11 @@ def upload_image():
         combined_ocr_text = ""
         combined_coordinates = {}
         
+        # 세션 ID 생성 또는 기존 세션 ID 사용
+        session_id = request.form.get('session_id')
+        if not session_id:
+            session_id = str(int(time.time()))
+        
         for file in files:
             if file.filename == '':
                 continue
@@ -756,18 +770,28 @@ def upload_image():
                     
                     # 각 이미지의 OCR 결과를 저장
                     image_id = str(len(uploaded_files))
-                    ocr_results_cache[image_id] = {
-                        'text': ocr_text,
-                        'coordinates': coordinates,
-                        'file_url': f'/uploads/{filename}',
-                        'image_type': image_type
-                    }
+                    if session_id not in ocr_results_cache:
+                        ocr_results_cache[session_id] = {
+                            'text': '',
+                            'coordinates': {},
+                            'images': []
+                        }
+                    
+                    ocr_results_cache[session_id]['text'] += f"\n--- 이미지 {len(uploaded_files) + 1} ---\n{ocr_text}"
+                    ocr_results_cache[session_id]['coordinates'].update(coordinates)
                     
                     # 전체 OCR 텍스트와 좌표 정보 결합
                     combined_ocr_text += f"\n--- 이미지 {len(uploaded_files) + 1} ---\n{ocr_text}"
                     combined_coordinates.update(coordinates)
                 
                 uploaded_files.append({
+                    'filename': filename,
+                    'file_url': f'/uploads/{filename}',
+                    'image_type': image_type if ocr_text else 'OTHER'
+                })
+                
+                # 세션에 이미지 정보 추가
+                ocr_results_cache[session_id]['images'].append({
                     'filename': filename,
                     'file_url': f'/uploads/{filename}',
                     'image_type': image_type if ocr_text else 'OTHER'
@@ -780,14 +804,6 @@ def upload_image():
         
         if not uploaded_files:
             return jsonify({'error': '처리된 파일이 없습니다'}), 400
-        
-        # 전체 OCR 결과 저장
-        session_id = str(int(time.time()))
-        ocr_results_cache[session_id] = {
-            'text': combined_ocr_text,
-            'coordinates': combined_coordinates,
-            'images': uploaded_files
-        }
         
         print(f"=== OCR 결과 ===")
         print(f"텍스트: {combined_ocr_text}")
