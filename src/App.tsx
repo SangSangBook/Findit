@@ -27,6 +27,7 @@ interface MediaItem {
   url: string;
   file: File;
   sessionId?: string;
+  imageType?: ImageType;
 }
 
 interface TimelineItem {
@@ -143,14 +144,23 @@ const App: React.FC = () => {
           type,
           url,
           file,
-          sessionId: data.session_id
+          sessionId: data.session_id,
+          imageType: data.image_type as ImageType
         };
       });
 
-      setMediaItems(prev => [...prev, ...newMediaItems]);
-      setSelectedMedia(newMediaItems[0]);
-      setMediaType(newMediaItems[0].type);
-      setMediaUrl(newMediaItems[0].url);
+      // 새로운 미디어 아이템을 기존 아이템에 추가하고 현재 페이지를 마지막 페이지로 설정
+      setMediaItems(prev => {
+        const updatedItems = [...prev, ...newMediaItems];
+        setCurrentPage(updatedItems.length - 1); // 마지막 페이지로 설정
+        return updatedItems;
+      });
+
+      // 마지막 미디어 아이템을 선택
+      const lastMediaItem = newMediaItems[newMediaItems.length - 1];
+      setSelectedMedia(lastMediaItem);
+      setMediaType(lastMediaItem.type);
+      setMediaUrl(lastMediaItem.url);
       setDetectedObjects([]);
       setTimeline([]);
 
@@ -456,6 +466,12 @@ const App: React.FC = () => {
       setSelectedMedia(prevMedia);
       setMediaType(prevMedia.type);
       setMediaUrl(prevMedia.url);
+      setDetectedObjects([]);
+      setTimeline([]);
+      setOcrText('');
+      if (prevMedia.imageType) {
+        setSelectedImageType(prevMedia.imageType);
+      }
     }
   };
 
@@ -466,6 +482,12 @@ const App: React.FC = () => {
       setSelectedMedia(nextMedia);
       setMediaType(nextMedia.type);
       setMediaUrl(nextMedia.url);
+      setDetectedObjects([]);
+      setTimeline([]);
+      setOcrText('');
+      if (nextMedia.imageType) {
+        setSelectedImageType(nextMedia.imageType);
+      }
     }
   };
 
@@ -475,6 +497,12 @@ const App: React.FC = () => {
 
   const handleImageTypeSelect = (type: ImageType) => {
     setSelectedImageType(type);
+    if (selectedMedia) {
+      const updatedMediaItems = mediaItems.map(item => 
+        item.id === selectedMedia.id ? { ...item, imageType: type } : item
+      );
+      setMediaItems(updatedMediaItems);
+    }
   };
 
   if (isLoading) {
@@ -609,116 +637,113 @@ const App: React.FC = () => {
               ref={videoRef}
             />
           ) : (
-            <div className="image-container" onClick={() => setIsModalOpen(true)}>
-              <div className="image-viewer">
-                <div className="image-wrapper">
-                  <div className="image-navigation">
-                    <div className="nav-button-container">
-                      <button 
-                        className="nav-button prev"
-                        onClick={handlePrevPage}
-                        disabled={currentPage === 0}
-                      >
-                        <i className="fas fa-chevron-left"></i>
-                      </button>
-                      {pageNotification.show && pageNotification.direction === 'prev' && (
-                        <div className="page-notification left">
-                          이전 페이지에 있는 결과에요!
-                        </div>
-                      )}
-                    </div>
-                    <div className="image-container" style={{ position: 'relative' }} onClick={(e) => {
-                      const target = e.target as HTMLElement;
-                      if (target.closest('.image-type-picker') || target.closest('.image-type-selector')) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        return;
-                      }
-                      setIsModalOpen(true);
-                    }}>
-                      <img 
-                        src={mediaUrl} 
-                        alt="Selected" 
-                        ref={imageRef}
-                        style={{ width: '100%', height: 'auto', maxHeight: '400px', cursor: 'pointer' }}
-                      />
-                      {isAnalyzing && (
-                        <div className="analyzing-overlay">
-                          <div className="analyzing-content">
-                            <i className="fas fa-spinner fa-spin"></i>
-                            <span>이미지 분석 중...</span>
-                          </div>
-                        </div>
-                      )}
-                      {detectedObjects
-                        .filter(obj => obj.pageIndex === currentPage)
-                        .map((obj, index) => {
-                          const img = imageRef.current;
-                          if (!img) return null;
-                          
-                          const rect = img.getBoundingClientRect();
-                          const bbox = obj.bbox;
-                          
-                          const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
-                          const scaleX = rect.width / img.naturalWidth;
-                          const scaleY = rect.height / img.naturalHeight;
-                          
-                          const x1 = isNormalized ? bbox.x1 * img.naturalWidth : bbox.x1;
-                          const y1 = isNormalized ? bbox.y1 * img.naturalHeight : bbox.y1;
-                          const x2 = isNormalized ? bbox.x2 * img.naturalWidth : bbox.x2;
-                          const y2 = isNormalized ? bbox.y2 * img.naturalHeight : bbox.y2;
-                          
-                          const centerX = (x1 + x2) / 2;
-                          const centerY = (y1 + y2) / 2;
-                          const radius = 10;
-                          
-                          const displayCenterX = centerX * scaleX;
-                          const displayCenterY = centerY * scaleY;
-                          const displayRadius = radius;
-                
-                          return (
-                            <div
-                              key={index}
-                              style={{
-                                position: 'absolute',
-                                left: `${displayCenterX - displayRadius}px`,
-                                top: `${displayCenterY - displayRadius}px`,
-                                width: `${displayRadius * 2}px`,
-                                height: `${displayRadius * 2}px`,
-                                border: "2px solid red",
-                                borderRadius: "50%",
-                                pointerEvents: "none",
-                                zIndex: 1
-                              }}
-                            />
-                          );
-                        })}
-                      <div className="image-type-picker">
-                        <ImageTypeSelector
-                          selectedType={selectedImageType}
-                          onTypeSelect={handleImageTypeSelect}
-                          ocrText={ocrText}
-                        />
+            <div className="image-viewer">
+              <div className="image-wrapper">
+                <div className="image-navigation">
+                  <div className="nav-button-container">
+                    <button 
+                      className="nav-button prev"
+                      onClick={handlePrevPage}
+                      disabled={currentPage === 0}
+                    >
+                      <i className="fas fa-chevron-left"></i>
+                    </button>
+                    {pageNotification.show && pageNotification.direction === 'prev' && (
+                      <div className="page-notification left">
+                        이전 페이지에 있는 결과에요!
                       </div>
-                    </div>
-                    <div className="nav-button-container">
-                      <button 
-                        className="nav-button next"
-                        onClick={handleNextPage}
-                        disabled={currentPage === mediaItems.length - 1}
-                      >
-                        <i className="fas fa-chevron-right"></i>
-                      </button>
-                      {pageNotification.show && pageNotification.direction === 'next' && (
-                        <div className="page-notification right">
-                          다음 페이지에 있는 결과에요!
+                    )}
+                  </div>
+                  <div className="image-container" onClick={(e) => {
+                    const target = e.target as HTMLElement;
+                    if (target.closest('.image-type-picker') || target.closest('.image-type-selector')) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      return;
+                    }
+                    setIsModalOpen(true);
+                  }}>
+                    <img 
+                      src={mediaUrl} 
+                      alt="Selected" 
+                      ref={imageRef}
+                    />
+                    {isAnalyzing && (
+                      <div className="analyzing-overlay">
+                        <div className="analyzing-content">
+                          <i className="fas fa-spinner fa-spin"></i>
+                          <span>이미지 분석 중...</span>
                         </div>
-                      )}
+                      </div>
+                    )}
+                    {detectedObjects
+                      .filter(obj => obj.pageIndex === currentPage)
+                      .map((obj, index) => {
+                        const img = imageRef.current;
+                        if (!img) return null;
+                        
+                        const rect = img.getBoundingClientRect();
+                        const bbox = obj.bbox;
+                        
+                        const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
+                        const scaleX = rect.width / img.naturalWidth;
+                        const scaleY = rect.height / img.naturalHeight;
+                        
+                        const x1 = isNormalized ? bbox.x1 * img.naturalWidth : bbox.x1;
+                        const y1 = isNormalized ? bbox.y1 * img.naturalHeight : bbox.y1;
+                        const x2 = isNormalized ? bbox.x2 * img.naturalWidth : bbox.x2;
+                        const y2 = isNormalized ? bbox.y2 * img.naturalHeight : bbox.y2;
+                        
+                        const centerX = (x1 + x2) / 2;
+                        const centerY = (y1 + y2) / 2;
+                        const radius = 10;
+                        
+                        const displayCenterX = centerX * scaleX;
+                        const displayCenterY = centerY * scaleY;
+                        const displayRadius = radius;
+              
+                        return (
+                          <div
+                            key={index}
+                            style={{
+                              position: 'absolute',
+                              left: `${displayCenterX - displayRadius}px`,
+                              top: `${displayCenterY - displayRadius}px`,
+                              width: `${displayRadius * 2}px`,
+                              height: `${displayRadius * 2}px`,
+                              border: "2px solid red",
+                              borderRadius: "50%",
+                              pointerEvents: "none",
+                              zIndex: 1
+                            }}
+                          />
+                        );
+                      })}
+                    <div className="image-type-picker">
+                      <ImageTypeSelector
+                        selectedType={selectedImageType}
+                        onTypeSelect={handleImageTypeSelect}
+                        ocrText={ocrText}
+                      />
                     </div>
                   </div>
-                  <div className="page-indicator">
-                    {currentPage + 1} / {mediaItems.length}
+                  <div className="nav-button-container">
+                    <button 
+                      className="nav-button next"
+                      onClick={handleNextPage}
+                      disabled={currentPage === mediaItems.length - 1}
+                    >
+                      <i className="fas fa-chevron-right"></i>
+                    </button>
+                    {pageNotification.show && pageNotification.direction === 'next' && (
+                      <div className="page-notification right">
+                        다음 페이지에 있는 결과에요!
+                      </div>
+                    )}
                   </div>
+                </div>
+                <div className="page-indicator">
+                  {currentPage + 1} / {mediaItems.length}
                 </div>
               </div>
             </div>
@@ -821,9 +846,25 @@ const App: React.FC = () => {
       )}
 
       {isModalOpen && selectedMedia && selectedMedia.type === 'image' && (
-        <div className="image-modal" onClick={() => setIsModalOpen(false)}>
+        <div className="image-modal" onClick={() => {
+          setIsModalOpen(false);
+          // 모달이 닫힐 때 이미지 크기 복원
+          if (imageRef.current) {
+            imageRef.current.style.width = '100%';
+            imageRef.current.style.height = 'auto';
+            imageRef.current.style.maxHeight = '400px';
+          }
+        }}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setIsModalOpen(false)}>×</button>
+            <button className="modal-close" onClick={() => {
+              setIsModalOpen(false);
+              // 모달이 닫힐 때 이미지 크기 복원
+              if (imageRef.current) {
+                imageRef.current.style.width = '100%';
+                imageRef.current.style.height = 'auto';
+                imageRef.current.style.maxHeight = '400px';
+              }
+            }}>×</button>
             <div className="modal-image-container">
               <img 
                 ref={modalImageRef}

@@ -335,16 +335,24 @@ body::after {
 
 .image-container {
   position: relative;
-  display: inline-block;
-  max-width: 100%;
-  margin: 0 auto;
+  width: 100%;
+  height: 400px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  background-color: #f5f5f5;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 .image-container img {
   max-width: 100%;
+  max-height: 100%;
+  width: auto;
   height: auto;
-  display: block;
-  margin: 0 auto;
+  object-fit: contain;
+  transition: transform 0.3s ease;
 }
 
 .text-highlight {
@@ -689,14 +697,30 @@ body {
 }
 
 .image-viewer {
-  grid-column: 1;
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1rem;
+  justify-content: center;
+}
+
+.image-wrapper {
   width: 100%;
-  max-width: 800px;
-  margin: 0 auto;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-navigation {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
 }
 
 .chat-section {
@@ -1300,22 +1324,21 @@ body {
 }
 
 .modal-image-container {
-  position: relative;
   width: 100%;
   height: 100%;
   display: flex;
   justify-content: center;
   align-items: center;
-  will-change: transform;
-  transform: translateZ(0);
+  overflow: hidden;
+  background-color: #f5f5f5;
 }
 
 .modal-image-container img {
   max-width: 100%;
-  max-height: 90vh;
+  max-height: 100%;
+  width: auto;
+  height: auto;
   object-fit: contain;
-  will-change: transform;
-  transform: translateZ(0);
 }
 
 .image-type-selector {
