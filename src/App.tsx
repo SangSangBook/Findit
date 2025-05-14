@@ -85,6 +85,7 @@ const App: React.FC = () => {
   const modalImageRef = useRef<HTMLImageElement>(null);
   const [selectedImageType, setSelectedImageType] = useState<ImageType>('OTHER');
   const [ocrText, setOcrText] = useState('');
+  const youtubePlayerRef = useRef<HTMLIFrameElement>(null);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -325,9 +326,16 @@ const App: React.FC = () => {
   };
 
   const seekToTimestamp = (timestamp: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = timestamp;
-      videoRef.current.play();  // 해당 시점부터 자동 재생
+    if (youtubePlayerRef.current) {
+      // YouTube Player API를 통해 시간 이동
+      youtubePlayerRef.current.contentWindow?.postMessage(
+        JSON.stringify({
+          event: 'command',
+          func: 'seekTo',
+          args: [timestamp, true]
+        }),
+        '*'
+      );
     }
   };
 
@@ -525,17 +533,14 @@ const App: React.FC = () => {
         throw new Error(data.error);
       }
 
-      // YouTube 비디오는 미디어 그리드에 추가하지 않고 youtube-preview에만 표시
-      const youtubeVideoUrl = `youtube.com/${data.file_url}`;  // YouTube URL 형식으로 변경
+      // YouTube 비디오는 youtube-preview에만 표시
       setSelectedMedia({
         id: Date.now().toString(),
         type: 'video',
-        url: youtubeVideoUrl,  // YouTube URL 형식으로 설정
+        url: videoId,
         file: new File([], 'youtube-video.mp4'),
         sessionId: data.session_id
       });
-      setMediaType('video');
-      setMediaUrl(youtubeVideoUrl);  // YouTube URL 형식으로 설정
       setYoutubeUrl('');
       
       // 타임라인 설정
@@ -737,81 +742,72 @@ const App: React.FC = () => {
 
       <div className="right-section">
         <div className="media-container">
-          <div className={`selected-media ${selectedMedia ? 'has-media' : ''}`}>
-            {selectedMedia ? (
-              selectedMedia.type === 'video' && !selectedMedia.url.includes('youtube.com') ? (
-                <video 
-                  src={mediaUrl} 
-                  controls 
-                  className="selected-video"
-                  ref={videoRef}
-                />
-              ) : selectedMedia.type === 'image' ? (
-                <div className="image-viewer">
-                  <div className="image-wrapper">
-                    <div className="image-navigation">
-                      <div className="nav-button-container">
-                        <button 
-                          className="nav-button prev"
-                          onClick={handlePrevPage}
-                          disabled={currentPage === 0}
-                        >
-                          <i className="fas fa-chevron-left"></i>
-                        </button>
-                        {pageNotification.show && pageNotification.direction === 'prev' && (
-                          <div className="page-notification left">
-                            이전 페이지에 있는 결과에요!
-                          </div>
-                        )}
-                      </div>
-                      <div className="image-container">
-                        <img 
-                          src={mediaUrl} 
-                          alt="Selected" 
-                          ref={imageRef}
-                          className={detectedObjects.length > 0 ? 'has-results' : ''}
-                        />
-                        {detectedObjects.length > 0 && (
-                          <div className="preview-overlay">
-                            <button 
-                              className="view-results-button"
-                              onClick={() => setIsModalOpen(true)}
-                            >
-                              <i className="fas fa-search"></i>
-                              결과 보기
-                            </button>
-                          </div>
-                        )}
-                        {isAnalyzing && (
-                          <div className="analyzing-overlay">
-                            <div className="analyzing-content">
-                              <i className="fas fa-spinner fa-spin"></i>
-                              <span>이미지 분석 중...</span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                      <div className="nav-button-container">
-                        <button 
-                          className="nav-button next"
-                          onClick={handleNextPage}
-                          disabled={currentPage === mediaItems.length - 1}
-                        >
-                          <i className="fas fa-chevron-right"></i>
-                        </button>
-                        {pageNotification.show && pageNotification.direction === 'next' && (
-                          <div className="page-notification right">
-                            다음 페이지에 있는 결과에요!
-                          </div>
-                        )}
-                      </div>
+          <div className={`selected-media ${selectedMedia && selectedMedia.type === 'image' ? 'has-media' : ''}`}>
+            {selectedMedia && selectedMedia.type === 'image' ? (
+              <div className="image-viewer">
+                <div className="image-wrapper">
+                  <div className="image-navigation">
+                    <div className="nav-button-container">
+                      <button 
+                        className="nav-button prev"
+                        onClick={handlePrevPage}
+                        disabled={currentPage === 0}
+                      >
+                        <i className="fas fa-chevron-left"></i>
+                      </button>
+                      {pageNotification.show && pageNotification.direction === 'prev' && (
+                        <div className="page-notification left">
+                          이전 페이지에 있는 결과에요!
+                        </div>
+                      )}
                     </div>
-                    <div className="page-indicator">
-                      {currentPage + 1} / {mediaItems.length}
+                    <div className="image-container">
+                      <img 
+                        src={mediaUrl} 
+                        alt="Selected" 
+                        ref={imageRef}
+                        className={detectedObjects.length > 0 ? 'has-results' : ''}
+                      />
+                      {detectedObjects.length > 0 && (
+                        <div className="preview-overlay">
+                          <button 
+                            className="view-results-button"
+                            onClick={() => setIsModalOpen(true)}
+                          >
+                            <i className="fas fa-search"></i>
+                            결과 보기
+                          </button>
+                        </div>
+                      )}
+                      {isAnalyzing && (
+                        <div className="analyzing-overlay">
+                          <div className="analyzing-content">
+                            <i className="fas fa-spinner fa-spin"></i>
+                            <span>이미지 분석 중...</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="nav-button-container">
+                      <button 
+                        className="nav-button next"
+                        onClick={handleNextPage}
+                        disabled={currentPage === mediaItems.length - 1}
+                      >
+                        <i className="fas fa-chevron-right"></i>
+                      </button>
+                      {pageNotification.show && pageNotification.direction === 'next' && (
+                        <div className="page-notification right">
+                          다음 페이지에 있는 결과에요!
+                        </div>
+                      )}
                     </div>
                   </div>
+                  <div className="page-indicator">
+                    {currentPage + 1} / {mediaItems.length}
+                  </div>
                 </div>
-              ) : null
+              </div>
             ) : (
               <div className="media-placeholder">
                 <i className="fas fa-image"></i>
@@ -848,12 +844,16 @@ const App: React.FC = () => {
 
         <div className="youtube-input-container">
           <div className="youtube-preview">
-            {selectedMedia && selectedMedia.type === 'video' && selectedMedia.url.includes('youtube.com') ? (
-              <video 
-                src={mediaUrl} 
-                controls 
-                className="selected-video"
-                ref={videoRef}
+            {selectedMedia && selectedMedia.type === 'video' ? (
+              <iframe
+                ref={youtubePlayerRef}
+                width="100%"
+                height="100%"
+                src={`https://www.youtube.com/embed/${selectedMedia.url}?enablejsapi=1`}
+                title="YouTube video player"
+                frameBorder="0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
               />
             ) : (
               <div className="youtube-placeholder">
