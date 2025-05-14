@@ -97,74 +97,134 @@ const App: React.FC = () => {
     setIsAnalyzing(true);
     setError(null);
 
-    const formData = new FormData();
-    for (let i = 0; i < files.length; i++) {
-      formData.append('images[]', files[i]);
-    }
-
     try {
-      const response = await fetch('http://localhost:5001/upload-image', {
-        method: 'POST',
-        body: formData,
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
+      // 파일 타입에 따라 다른 엔드포인트 사용
+      const file = files[0];  // 비디오는 한 번에 하나만 업로드
+      const isVideo = file.type.startsWith('video/');
+      const formData = new FormData();
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || '파일 업로드에 실패했습니다');
-      }
+      if (isVideo) {
+        formData.append('video', file);
+        formData.append('query', searchTerm);
+        formData.append('mode', searchMode);
+        
+        const response = await fetch('http://localhost:5001/upload-video', {
+          method: 'POST',
+          body: formData,
+          headers: {
+            'Accept': 'application/json',
+          },
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || '비디오 업로드에 실패했습니다');
+        }
 
-      const data = await response.json();
-      console.log('=== 서버 응답 데이터 ===');
-      console.log('업로드 성공:', data);
+        const data = await response.json();
+        console.log('=== 서버 응답 데이터 ===');
+        console.log('업로드 성공:', data);
 
-      // 세션 ID 저장 (이미 있는 경우 유지)
-      if (!sessionId) {
-        setSessionId(data.session_id);
-      }
+        // 세션 ID 저장
+        if (!sessionId) {
+          setSessionId(data.session_id);
+        }
 
-      // OCR 텍스트 저장
-      if (data.text) {
-        console.log('OCR 텍스트:', data.text);
-        setOcrText(data.text);
-      }
+        // OCR 텍스트 저장
+        if (data.text) {
+          console.log('OCR 텍스트:', data.text);
+          setOcrText(data.text);
+        }
 
-      // 이미지 타입 설정
-      if (data.image_type) {
-        console.log('감지된 이미지 타입:', data.image_type);
-        setSelectedImageType(data.image_type as ImageType);
-      }
+        // 비디오 URL 생성
+        const videoUrl = URL.createObjectURL(file);
 
-      // 각 파일에 대한 미디어 아이템 생성
-      const newMediaItems: MediaItem[] = Array.from(files).map((file, index) => {
-        const url = URL.createObjectURL(file);
-        const type = file.type.startsWith('video/') ? 'video' : 'image';
-        return {
-          id: `${Date.now()}_${index}`,
-          type,
-          url,
+        // 비디오 아이템 생성
+        const newMediaItem: MediaItem = {
+          id: Date.now().toString(),
+          type: 'video',
+          url: videoUrl,
           file,
-          sessionId: sessionId || data.session_id, // 기존 세션 ID 사용
-          imageType: data.image_type as ImageType
+          sessionId: sessionId || data.session_id,
         };
-      });
 
-      // 새로운 미디어 아이템을 기존 아이템에 추가하고 현재 페이지를 마지막 페이지로 설정
-      setMediaItems(prev => {
-        const updatedItems = [...prev, ...newMediaItems];
-        setCurrentPage(updatedItems.length - 1); // 마지막 페이지로 설정
-        return updatedItems;
-      });
+        setMediaItems(prev => [...prev, newMediaItem]);
+        setSelectedMedia(newMediaItem);
+        setMediaType('video');
+        setMediaUrl(videoUrl);
+        
+        // 타임라인 설정
+        if (data.file.timeline) {
+          setTimeline(data.file.timeline);
+        }
+      } else {
+        // 이미지 파일 업로드
+        for (let i = 0; i < files.length; i++) {
+          formData.append('images[]', files[i]);
+        }
 
-      // 마지막 미디어 아이템을 선택
-      const lastMediaItem = newMediaItems[newMediaItems.length - 1];
-      setSelectedMedia(lastMediaItem);
-      setMediaType(lastMediaItem.type);
-      setMediaUrl(lastMediaItem.url);
+        const response = await fetch('http://localhost:5001/upload-image', {
+          method: 'POST',
+          body: formData,
+          headers: {
+            'Accept': 'application/json',
+          },
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || '이미지 업로드에 실패했습니다');
+        }
+
+        const data = await response.json();
+        console.log('=== 서버 응답 데이터 ===');
+        console.log('업로드 성공:', data);
+
+        // 세션 ID 저장
+        if (!sessionId) {
+          setSessionId(data.session_id);
+        }
+
+        // OCR 텍스트 저장
+        if (data.text) {
+          console.log('OCR 텍스트:', data.text);
+          setOcrText(data.text);
+        }
+
+        // 이미지 타입 설정
+        if (data.image_type) {
+          console.log('감지된 이미지 타입:', data.image_type);
+          setSelectedImageType(data.image_type as ImageType);
+        }
+
+        // 각 파일에 대한 미디어 아이템 생성
+        const newMediaItems: MediaItem[] = Array.from(files).map((file, index) => {
+          const url = URL.createObjectURL(file);
+          return {
+            id: `${Date.now()}_${index}`,
+            type: 'image',
+            url,
+            file,
+            sessionId: sessionId || data.session_id,
+            imageType: data.image_type as ImageType
+          };
+        });
+
+        // 새로운 미디어 아이템을 기존 아이템에 추가하고 현재 페이지를 마지막 페이지로 설정
+        setMediaItems(prev => {
+          const updatedItems = [...prev, ...newMediaItems];
+          setCurrentPage(updatedItems.length - 1);
+          return updatedItems;
+        });
+
+        // 마지막 미디어 아이템을 선택
+        const lastMediaItem = newMediaItems[newMediaItems.length - 1];
+        setSelectedMedia(lastMediaItem);
+        setMediaType('image');
+        setMediaUrl(lastMediaItem.url);
+      }
+
       setDetectedObjects([]);
-      setTimeline([]);
 
     } catch (error) {
       console.error('=== 오류 발생 ===');
@@ -256,10 +316,11 @@ const App: React.FC = () => {
     const newSearchTerm = e.target.value;
     setSearchTerm(newSearchTerm);
     
-    // 검색어를 지워도 타임라인은 유지
+    // 검색어가 비어있을 때만 검색 결과를 초기화
     if (newSearchTerm === '') {
       setDetectedObjects([]);
       setNoResults(false);
+      setTimeline([]);
     }
   };
 

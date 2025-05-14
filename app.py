@@ -628,6 +628,7 @@ def process_video(video_path, query, mode='normal'):
     frames, timestamps = extract_frames_from_video(video_path, interval=1.0, max_frames=max_frames)
     
     timeline_results = []
+    all_ocr_text = []  # 모든 OCR 텍스트를 저장할 리스트
     
     if mode == 'smart':
         # 연관어 검색을 위한 GPT 프롬프트
@@ -675,6 +676,10 @@ def process_video(video_path, query, mode='normal'):
                 text_blocks = extract_text_with_vision(temp_frame_path)
                 
                 if text_blocks:
+                    # 현재 프레임의 OCR 텍스트 저장
+                    frame_text = '\n'.join([block['text'] for block in text_blocks])
+                    all_ocr_text.append(f"=== {timestamp}초 ===\n{frame_text}")
+                    
                     detected_texts = []
                     for block in text_blocks:
                         text = block['text']
@@ -715,62 +720,73 @@ def process_video(video_path, query, mode='normal'):
         
         timeline_results.extend(batch_results)
     
+    # 전체 OCR 텍스트를 하나의 문자열로 결합
+    ocr_text = '\n'.join(all_ocr_text)
+    print(f"=== 전체 OCR 텍스트 ===\n{ocr_text}")
+    
     return timeline_results
 
 # 비디오 파일 업로드 처리
-@app.route('/upload', methods=['POST'])
+@app.route('/upload-video', methods=['POST'])
 def upload_video():
     try:
-        print("Received upload request")
         if 'video' not in request.files:
-            print("No video file in request")
-            return jsonify({'error': 'No video file provided'}), 400
+            return jsonify({'error': '비디오 파일이 필요합니다'}), 400
         
         file = request.files['video']
         if file.filename == '':
-            print("Empty filename")
-            return jsonify({'error': 'No selected file'}), 400
+            return jsonify({'error': '선택된 파일이 없습니다'}), 400
         
         if not allowed_file(file.filename):
-            print(f"Invalid file format: {file.filename}")
-            return jsonify({'error': 'Invalid file format. Allowed formats: mp4, avi, mov, mkv'}), 400
+            return jsonify({'error': f'지원하지 않는 파일 형식입니다: {file.filename}'}), 400
         
-        filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secure_filename(file.filename)}"
+        # 세션 ID 생성 또는 기존 세션 ID 사용
+        session_id = request.form.get('session_id')
+        if not session_id:
+            session_id = str(int(time.time()))
+        
+        filename = f"{int(time.time())}_{secure_filename(file.filename)}"
         filepath = os.path.join(UPLOAD_FOLDER, filename)
-        print(f"Saving file to: {filepath}")
-        
         file.save(filepath)
-        print("File saved successfully")
         
-        # 자막 추출은 별도의 엔드포인트로 분리
-        return jsonify({
-            'message': 'Video uploaded successfully',
-            'file_url': f'/uploads/{filename}'
+        # 비디오 처리
+        query = request.form.get('query', '')
+        mode = request.form.get('mode', 'normal')
+        timeline_results = process_video(filepath, query, mode)
+        
+        # OCR 텍스트 가져오기
+        ocr_text = '\n'.join([f"=== {item['timestamp']}초 ===\n" + '\n'.join([text['text'] for text in item['texts']]) for item in timeline_results])
+        
+        # 세션에 비디오 정보 저장
+        if session_id not in ocr_results_cache:
+            ocr_results_cache[session_id] = {
+                'text': '',
+                'coordinates': {},
+                'videos': []
+            }
+        
+        ocr_results_cache[session_id]['text'] = ocr_text
+        ocr_results_cache[session_id]['videos'].append({
+            'filename': filename,
+            'file_url': f'/uploads/{filename}',
+            'timeline': timeline_results
         })
+        
+        return jsonify({
+            'message': '비디오 업로드 성공',
+            'session_id': session_id,
+            'file': {
+                'filename': filename,
+                'file_url': f'/uploads/{filename}',
+                'timeline': timeline_results
+            },
+            'text': ocr_text
+        })
+                
     except Exception as e:
-        print(f"Error in upload_video: {str(e)}")
+        print(f"비디오 업로드 중 오류 발생: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/extract-subtitles/<filename>', methods=['POST'])
-def extract_subtitles_endpoint(filename):
-    try:
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        if not os.path.exists(filepath):
-            return jsonify({'error': 'File not found'}), 404
-            
-        print("Starting subtitle extraction")
-        subtitles = extract_subtitles(filepath)
-        print(f"Extracted {len(subtitles)} subtitles")
-        
-        return jsonify({
-            'message': 'Subtitles extracted successfully',
-            'subtitles': subtitles
-        })
-    except Exception as e:
-        print(f"Error in extract_subtitles_endpoint: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-# 이미지 파일 업로드 처리
 @app.route('/upload-image', methods=['POST'])
 def upload_image():
     try:
@@ -815,7 +831,6 @@ def upload_image():
                     print(f"감지된 이미지 타입: {image_type}")
                     
                     # 각 이미지의 OCR 결과를 저장
-                    image_id = str(len(uploaded_files))
                     if session_id not in ocr_results_cache:
                         ocr_results_cache[session_id] = {
                             'text': '',
@@ -833,14 +848,14 @@ def upload_image():
                 uploaded_files.append({
                     'filename': filename,
                     'file_url': f'/uploads/{filename}',
-                    'image_type': image_type if ocr_text else 'OTHER'
+                    'image_type': image_type if text_blocks else 'OTHER'
                 })
                 
                 # 세션에 이미지 정보 추가
                 ocr_results_cache[session_id]['images'].append({
                     'filename': filename,
                     'file_url': f'/uploads/{filename}',
-                    'image_type': image_type if ocr_text else 'OTHER'
+                    'image_type': image_type if text_blocks else 'OTHER'
                 })
                 
             finally:
@@ -859,8 +874,8 @@ def upload_image():
             'message': '이미지 업로드 성공',
             'session_id': session_id,
             'files': uploaded_files,
-            'text': combined_ocr_text,  # OCR 텍스트를 응답에 포함
-            'image_type': uploaded_files[0]['image_type'] if uploaded_files else 'OTHER'  # 첫 번째 이미지의 타입 반환
+            'text': combined_ocr_text,
+            'image_type': uploaded_files[0]['image_type'] if uploaded_files else 'OTHER'
         })
         
     except Exception as e:
@@ -1191,29 +1206,18 @@ def download_youtube_video(url):
 @app.route('/process-youtube', methods=['POST'])
 def process_youtube():
     try:
-        print("\n=== YouTube 처리 요청 시작 ===")
-        data = request.get_json()
-        if not data:
-            print("요청 데이터가 없습니다")
-            return jsonify({'error': '요청 데이터가 없습니다'}), 400
-
-        url = data.get('url')
-        query = data.get('query', '')
-        mode = data.get('mode', 'normal')
+        url = request.form.get('url')
+        query = request.form.get('query', '')
+        mode = request.form.get('mode', 'normal')
         
-        print(f"받은 URL: {url}")
+        if not url:
+            return jsonify({'error': 'URL이 필요합니다'}), 400
+            
+        print(f"=== YouTube 처리 시작 ===")
+        print(f"URL: {url}")
         print(f"검색어: {query}")
         print(f"모드: {mode}")
         
-        if not url:
-            print("URL이 제공되지 않음")
-            return jsonify({'error': 'YouTube URL이 필요합니다'}), 400
-            
-        if not is_valid_youtube_url(url):
-            print(f"유효하지 않은 YouTube URL: {url}")
-            return jsonify({'error': '유효하지 않은 YouTube URL입니다'}), 400
-        
-        print("YouTube 영상 다운로드 시작")
         try:
             # YouTube 영상 다운로드
             video_info = download_youtube_video(url)
@@ -1225,12 +1229,16 @@ def process_youtube():
                 timeline_results = process_video(video_info['filepath'], query, mode)
                 print(f"처리된 타임라인 결과: {len(timeline_results)}개 항목")
                 
+                # OCR 텍스트 가져오기
+                ocr_text = '\n'.join([f"=== {item['timestamp']}초 ===\n" + '\n'.join([text['text'] for text in item['texts']]) for item in timeline_results])
+                
                 response_data = {
                     'type': 'video',
                     'file_url': f'/uploads/{os.path.basename(video_info["filepath"])}',
                     'timeline': timeline_results,
                     'title': video_info['title'],
-                    'duration': video_info['duration']
+                    'duration': video_info['duration'],
+                    'ocr_text': ocr_text  # OCR 텍스트 추가
                 }
                 print("응답 데이터 준비 완료")
                 return jsonify(response_data)
