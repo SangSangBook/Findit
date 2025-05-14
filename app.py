@@ -803,9 +803,13 @@ def upload_image():
             
             try:
                 # OCR로 텍스트 추출
-                ocr_text, coordinates = extract_text_with_vision(filepath)
+                text_blocks = extract_text_with_vision(filepath)
                 
-                if ocr_text:
+                if text_blocks:
+                    # 텍스트 블록에서 전체 텍스트와 좌표 정보 추출
+                    ocr_text = '\n'.join([block['text'] for block in text_blocks])
+                    coordinates = {block['text']: {'bbox': block['bbox'], 'confidence': 1.0} for block in text_blocks}
+                    
                     # 이미지 타입 감지
                     image_type = detect_image_type(ocr_text)
                     print(f"감지된 이미지 타입: {image_type}")
