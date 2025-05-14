@@ -480,6 +480,24 @@ const App: React.FC = () => {
       return;
     }
 
+    // YouTube URL 형식 검증 및 변환
+    let videoId = '';
+    try {
+      const url = new URL(youtubeUrl);
+      if (url.hostname === 'youtube.com' || url.hostname === 'www.youtube.com') {
+        videoId = url.searchParams.get('v') || '';
+      } else if (url.hostname === 'youtu.be') {
+        videoId = url.pathname.slice(1);
+      }
+      
+      if (!videoId) {
+        throw new Error('유효한 YouTube URL이 아닙니다.');
+      }
+    } catch (error) {
+      alert('올바른 YouTube URL을 입력해주세요.');
+      return;
+    }
+
     setIsProcessingYoutube(true);
     try {
       const response = await fetch('http://localhost:5001/process-youtube', {
@@ -490,13 +508,15 @@ const App: React.FC = () => {
         },
         body: JSON.stringify({
           url: youtubeUrl,
+          video_id: videoId,
           query: '',
           mode: 'normal'
         })
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
 
       const data = await response.json();
@@ -505,29 +525,37 @@ const App: React.FC = () => {
         throw new Error(data.error);
       }
 
-      // 비디오 아이템 생성
-      const newMediaItem: MediaItem = {
+      // YouTube 비디오는 미디어 그리드에 추가하지 않고 youtube-preview에만 표시
+      const youtubeVideoUrl = `youtube.com/${data.file_url}`;  // YouTube URL 형식으로 변경
+      setSelectedMedia({
         id: Date.now().toString(),
         type: 'video',
-        url: data.file_url,
-        file: new File([], 'youtube-video.mp4')
-      };
-
-      setMediaItems(prev => [...prev, newMediaItem]);
-      setSelectedMedia(newMediaItem);
+        url: youtubeVideoUrl,  // YouTube URL 형식으로 설정
+        file: new File([], 'youtube-video.mp4'),
+        sessionId: data.session_id
+      });
       setMediaType('video');
-      setMediaUrl(data.file_url);
+      setMediaUrl(youtubeVideoUrl);  // YouTube URL 형식으로 설정
       setYoutubeUrl('');
-
-      // 타임라인 처리
-      if (data.timeline && data.timeline.length > 0) {
+      
+      // 타임라인 설정
+      if (data.timeline) {
         setTimeline(data.timeline);
       }
+      
+      // OCR 텍스트 설정
+      if (data.ocr_text) {
+        setOcrText(data.ocr_text);
+      }
+      
+      // 세션 ID 설정
+      if (data.session_id) {
+        setSessionId(data.session_id);
+      }
 
-      alert('영상 처리가 완료되었습니다.');
     } catch (error) {
-      console.error('Error:', error);
-      alert(`처리 중 오류가 발생했습니다: ${error instanceof Error ? error.message : '알 수 없는 오류'}`);
+      console.error('YouTube 처리 중 오류:', error);
+      setError(error instanceof Error ? error.message : 'YouTube 처리 중 오류가 발생했습니다');
     } finally {
       setIsProcessingYoutube(false);
     }
@@ -607,73 +635,51 @@ const App: React.FC = () => {
 
   return (
     <div className="App">
-      <div className="app-header">
-      </div>
-
-      <div className="upload-section">
-        <h3>파일 업로드</h3>
-        <div className="upload-options">
-          <div className="upload-option">
-            <h3>이미지 업로드</h3>
+      <div className="left-section">
+        <div className="app-logo">Findit!</div>
+        <div className="app-subtitle">미디어에서{'\n'}정보를{'\n'}찾아주세요</div>
+        <div className="upload-section">
+          <div className="upload-options">
+            <button
+              onClick={() => document.getElementById('image-upload')?.click()}
+              className="upload-button"
+            >
+              <i className="fas fa-camera"></i>
+              사진 업로드하기
+            </button>
             <input
+              id="image-upload"
               type="file"
               accept="image/*"
               multiple
               onChange={handleFileUpload}
               className="file-input"
+              style={{ display: 'none' }}
             />
-          </div>
-          <div className="upload-option">
-            <h3>동영상 업로드</h3>
+            <button
+              onClick={() => document.getElementById('video-upload')?.click()}
+              className="upload-button"
+            >
+              <i className="fas fa-video"></i>
+              영상 업로드하기
+            </button>
             <input
+              id="video-upload"
               type="file"
               accept="video/*"
               onChange={handleFileUpload}
               className="file-input"
+              style={{ display: 'none' }}
             />
           </div>
+          {isProcessing && <p>처리 중...</p>}
+          {error && <p className="error">{error}</p>}
         </div>
-        {isProcessing && <p>처리 중...</p>}
-        {error && <p className="error">{error}</p>}
       </div>
 
-      <div className="youtube-input-container">
-        <h3>YouTube URL</h3>
-        <input
-          type="text"
-          value={youtubeUrl}
-          onChange={(e) => setYoutubeUrl(e.target.value)}
-          placeholder="YouTube URL을 입력하세요"
-          className="youtube-input"
-        />
-        <button 
-          className="youtube-button"
-          onClick={handleYoutubeProcess}
-          disabled={isProcessingYoutube}
-        >
-          <i className="fab fa-youtube"></i>
-          {isProcessingYoutube ? '처리 중...' : '처리하기'}
-        </button>
-      </div>
-
-      <div 
-        ref={searchRef}
-        className={`search-section ${isSearchExpanded ? '' : 'collapsed'}`}
-        style={{ 
-          left: `${searchPosition.x}px`,
-          top: `${searchPosition.y}px`
-        }}
-        onMouseDown={handleMouseDown}
-      >
-        <div className="drag-handle">검색 패널</div>
-        <button 
-          className="toggle-button" 
-          onClick={() => setIsSearchExpanded(!isSearchExpanded)}
-          aria-label={isSearchExpanded ? '검색 패널 접기' : '검색 패널 펼치기'}
-        >
-          {isSearchExpanded ? '◀' : '▶'}
-        </button>
+      <div className={`search-section ${isSearchExpanded ? '' : 'collapsed'}`}>
         <div className="search-container">
+          <h2 className="search-title">검색패널</h2>
           <input
             type="text"
             value={searchTerm}
@@ -721,355 +727,325 @@ const App: React.FC = () => {
             </button>
           </div>
         </div>
+        <button 
+          className="toggle-button" 
+          onClick={() => setIsSearchExpanded(!isSearchExpanded)}
+        >
+          {isSearchExpanded ? '◀' : '▶'}
+        </button>
       </div>
 
-      {selectedMedia && (
-        <div className={`selected-media ${selectedMedia ? 'has-media' : ''}`}>
-          {selectedMedia.type === 'video' ? (
-            <video 
-              src={mediaUrl} 
-              controls 
-              className="selected-video"
-              ref={videoRef}
-            />
-          ) : (
-            <div className="image-viewer">
-              <div className="image-wrapper">
-                <div className="image-navigation">
-                  <div className="nav-button-container">
-                    <button 
-                      className="nav-button prev"
-                      onClick={handlePrevPage}
-                      disabled={currentPage === 0}
-                    >
-                      <i className="fas fa-chevron-left"></i>
-                    </button>
-                    {pageNotification.show && pageNotification.direction === 'prev' && (
-                      <div className="page-notification left">
-                        이전 페이지에 있는 결과에요!
-                      </div>
-                    )}
-                  </div>
-                  <div className="image-container" onClick={(e) => {
-                    const target = e.target as HTMLElement;
-                    if (target.closest('.image-type-picker') || target.closest('.image-type-selector')) {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      return;
-                    }
-                  }}>
-                    <img 
-                      src={mediaUrl} 
-                      alt="Selected" 
-                      ref={imageRef}
-                      className={detectedObjects.length > 0 ? 'has-results' : ''}
-                    />
-                    {detectedObjects.length > 0 && (
-                      <div className="preview-overlay">
-                        <button 
-                          className="view-results-button"
-                          onClick={() => setIsModalOpen(true)}
-                        >
-                          <i className="fas fa-search"></i>
-                          결과 보기
-                        </button>
-                      </div>
-                    )}
-                    {isAnalyzing && (
-                      <div className="analyzing-overlay">
-                        <div className="analyzing-content">
-                          <i className="fas fa-spinner fa-spin"></i>
-                          <span>이미지 분석 중...</span>
-                        </div>
-                      </div>
-                    )}
-                    {detectedObjects
-                      .filter(obj => obj.pageIndex === currentPage)
-                      .map((obj, index) => {
-                        const img = imageRef.current;
-                        if (!img) return null;
-                        
-                        const rect = img.getBoundingClientRect();
-                        const bbox = obj.bbox;
-                        
-                        // 디버깅을 위한 로그 추가
-                        console.log('=== 좌표 디버깅 ===');
-                        console.log('텍스트:', obj.text);
-                        console.log('원본 bbox:', bbox);
-                        console.log('이미지 크기:', {
-                            naturalWidth: img.naturalWidth,
-                            naturalHeight: img.naturalHeight,
-                            displayWidth: rect.width,
-                            displayHeight: rect.height
-                        });
-                        
-                        const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
-                        const scaleX = rect.width / img.naturalWidth;
-                        const scaleY = rect.height / img.naturalHeight;
-                        
-                        const x1 = isNormalized ? bbox.x1 * img.naturalWidth : bbox.x1;
-                        const y1 = isNormalized ? bbox.y1 * img.naturalHeight : bbox.y1;
-                        const x2 = isNormalized ? bbox.x2 * img.naturalWidth : bbox.x2;
-                        const y2 = isNormalized ? bbox.y2 * img.naturalHeight : bbox.y2;
-                        
-                        // 텍스트의 중심점 계산
-                        const centerX = (x1 + x2) / 2;
-                        const centerY = (y1 + y2) / 2;
-                        
-                        const displayX = centerX * scaleX;
-                        const displayY = centerY * scaleY;
-                        
-                        // 텍스트 크기에 비례하여 동그라미 크기 계산
-                        const textWidth = (x2 - x1) * scaleX;
-                        const textHeight = (y2 - y1) * scaleY;
-                        const radius = Math.max(textWidth, textHeight) * 0.3; // 텍스트 크기의 30%로 설정
-                        
-                        console.log('계산된 좌표:', {
-                            displayX,
-                            displayY,
-                            radius,
-                            textWidth,
-                            textHeight
-                        });
-                        
-                        return (
-                          <div
-                            key={index}
-                            style={{
-                              position: 'absolute',
-                              left: `${displayX - radius}px`,
-                              top: `${displayY - radius}px`,
-                              width: `${radius * 2}px`,
-                              height: `${radius * 2}px`,
-                              borderRadius: '50%',
-                              border: `2px solid ${obj.color || 'red'}`,
-                              backgroundColor: 'transparent',
-                              pointerEvents: 'none',
-                              zIndex: 1000
-                            }}
-                          />
-                        );
-                      })}
-                    <div className="image-type-picker">
-                      <ImageTypeSelector
-                        selectedType={selectedImageType}
-                        onTypeSelect={handleImageTypeSelect}
-                        ocrText={ocrText}
-                      />
-                    </div>
-                  </div>
-                  <div className="nav-button-container">
-                    <button 
-                      className="nav-button next"
-                      onClick={handleNextPage}
-                      disabled={currentPage === mediaItems.length - 1}
-                    >
-                      <i className="fas fa-chevron-right"></i>
-                    </button>
-                    {pageNotification.show && pageNotification.direction === 'next' && (
-                      <div className="page-notification right">
-                        다음 페이지에 있는 결과에요!
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <div className="page-indicator">
-                  {currentPage + 1} / {mediaItems.length}
-                </div>
-              </div>
-            </div>
-          )}
-          
-          {selectedMedia.type === 'image' && (
-            <div className="chat-section">
-              <h3>이미지에 대해 질문해보세요</h3>
-              <div className="chat-input-container">
-                <input
-                  type="text"
-                  value={chatMessage}
-                  onChange={(e) => setChatMessage(e.target.value)}
-                  placeholder="질문을 입력하세요..."
-                  className="chat-input"
+      <div className="right-section">
+        <div className="media-container">
+          <div className={`selected-media ${selectedMedia ? 'has-media' : ''}`}>
+            {selectedMedia ? (
+              selectedMedia.type === 'video' && !selectedMedia.url.includes('youtube.com') ? (
+                <video 
+                  src={mediaUrl} 
+                  controls 
+                  className="selected-video"
+                  ref={videoRef}
                 />
-                <button 
-                  onClick={handleChat} 
-                  className="chat-button"
-                  disabled={mediaItems.filter(item => item.type === 'image').length === 0}
-                >
-                  정보 가져오기
-                </button>
-              </div>
-              {chatResponse && (
-                <div className="chat-response">
-                  <p style={{ whiteSpace: 'pre-line' }}>{chatResponse}</p>
-                </div>
-              )}
-            </div>
-          )}
-          
-          {noResults && (
-            <div className="no-results-message">
-              <i className="fas fa-search"></i>
-              <p>검색 결과가 없습니다.</p>
-              <p className="sub-text">다른 검색어를 입력하거나 OCR을 새로고침해보세요.</p>
-            </div>
-          )}
-
-          {summary && (
-            <div className="summary-container">
-              <div className="summary-content">
-                {summary.split('\n').map((line, index) => (
-                  <p key={index}>{line}</p>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {timeline.length > 0 && (
-            <div className="timeline-container">
-              <h3>타임라인</h3>
-              <div className="timeline">
-                {timeline.map((item, index) => (
-                  <div 
-                    key={index} 
-                    className="timeline-item"
-                    onClick={() => seekToTimestamp(item.timestamp)}
-                  >
-                    <span className="timestamp">
-                      {Math.floor(item.timestamp / 60)}:{Math.floor(item.timestamp % 60).toString().padStart(2, '0')}
-                    </span>
-                    <div className="texts">
-                      {item.texts.map((text, i) => {
-                        const isMatch = searchTerm && text.text.toLowerCase().includes(searchTerm.toLowerCase());
-                        return (
-                          <div 
-                            key={i} 
-                            className="detected-text"
-                            style={{ 
-                              backgroundColor: isMatch ? 'rgba(0, 123, 255, 0.3)' : 'transparent'
-                            }}
-                          >
-                            {text.text}
+              ) : selectedMedia.type === 'image' ? (
+                <div className="image-viewer">
+                  <div className="image-wrapper">
+                    <div className="image-navigation">
+                      <div className="nav-button-container">
+                        <button 
+                          className="nav-button prev"
+                          onClick={handlePrevPage}
+                          disabled={currentPage === 0}
+                        >
+                          <i className="fas fa-chevron-left"></i>
+                        </button>
+                        {pageNotification.show && pageNotification.direction === 'prev' && (
+                          <div className="page-notification left">
+                            이전 페이지에 있는 결과에요!
                           </div>
-                        );
-                      })}
+                        )}
+                      </div>
+                      <div className="image-container">
+                        <img 
+                          src={mediaUrl} 
+                          alt="Selected" 
+                          ref={imageRef}
+                          className={detectedObjects.length > 0 ? 'has-results' : ''}
+                        />
+                        {detectedObjects.length > 0 && (
+                          <div className="preview-overlay">
+                            <button 
+                              className="view-results-button"
+                              onClick={() => setIsModalOpen(true)}
+                            >
+                              <i className="fas fa-search"></i>
+                              결과 보기
+                            </button>
+                          </div>
+                        )}
+                        {isAnalyzing && (
+                          <div className="analyzing-overlay">
+                            <div className="analyzing-content">
+                              <i className="fas fa-spinner fa-spin"></i>
+                              <span>이미지 분석 중...</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="nav-button-container">
+                        <button 
+                          className="nav-button next"
+                          onClick={handleNextPage}
+                          disabled={currentPage === mediaItems.length - 1}
+                        >
+                          <i className="fas fa-chevron-right"></i>
+                        </button>
+                        {pageNotification.show && pageNotification.direction === 'next' && (
+                          <div className="page-notification right">
+                            다음 페이지에 있는 결과에요!
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="page-indicator">
+                      {currentPage + 1} / {mediaItems.length}
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {mediaItems.length > 0 && (
-        <div className="media-grid">
-          {mediaItems.map(media => (
-            <div
-              key={media.id}
-              className={`media-item ${selectedMedia?.id === media.id ? 'selected' : ''}`}
-              onClick={() => handleMediaItemClick(media)}
-            >
-              {media.type === 'video' ? (
-                <video src={media.url} className="media-preview" />
-              ) : (
-                <img src={media.url} alt="Uploaded" className="media-preview" />
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {isModalOpen && selectedMedia && selectedMedia.type === 'image' && (
-        <div className="image-modal" onClick={() => {
-          setIsModalOpen(false);
-          setIsModalImageLoaded(false); // 모달 닫을 때 로딩 상태 초기화
-          // 모달이 닫힐 때 이미지 크기 복원
-          if (imageRef.current) {
-            imageRef.current.style.width = '100%';
-            imageRef.current.style.height = 'auto';
-            imageRef.current.style.maxHeight = '400px';
-          }
-        }}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => {
-              setIsModalOpen(false);
-              setIsModalImageLoaded(false); // 모달 닫을 때 로딩 상태 초기화
-              // 모달이 닫힐 때 이미지 크기 복원
-              if (imageRef.current) {
-                imageRef.current.style.width = '100%';
-                imageRef.current.style.height = 'auto';
-                imageRef.current.style.maxHeight = '400px';
-              }
-            }}>×</button>
-            <div className="modal-image-container">
-              <img 
-                ref={modalImageRef}
-                src={mediaUrl} 
-                alt="Full size" 
-                style={{ width: '100%', height: 'auto' }}
-                onLoad={handleModalImageLoad}
-                loading="eager"
-                decoding="async"
-              />
-              {!isModalImageLoaded && (
-                <div className="modal-loading-overlay">
-                  <div className="modal-loading-content">
-                    <div className="loading-spinner"></div>
-                    <span>검색 결과 로딩 중...</span>
-                  </div>
                 </div>
-              )}
-              {isModalImageLoaded && detectedObjects
-                .filter(obj => obj.pageIndex === currentPage)
-                .map((obj, index) => {
-                  if (!modalImageRef.current) return null;
-                  
-                  const imgElement = modalImageRef.current;
-                  const rect = imgElement.getBoundingClientRect();
-                  const bbox = obj.bbox;
-                  
-                  const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
-                  const scaleX = rect.width / imgElement.naturalWidth;
-                  const scaleY = rect.height / imgElement.naturalHeight;
-                  
-                  const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
-                  const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
-                  const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
-                  const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
-                  
-                  const centerX = (x1 + x2) / 2;
-                  const centerY = (y1 + y2) / 2;
-                  
-                  // 텍스트 크기에 비례하여 동그라미 크기 계산 (2배 크기)
-                  const textWidth = (x2 - x1) * scaleX;
-                  const textHeight = (y2 - y1) * scaleY;
-                  const radius = Math.max(textWidth, textHeight) * 0.6; // 텍스트 크기의 60%로 설정
-                  
-                  const displayCenterX = centerX * scaleX;
-                  const displayCenterY = centerY * scaleY;
-                  
-                  return (
-                    <div
-                      key={index}
-                      style={{
-                        position: 'absolute',
-                        left: `${displayCenterX - radius}px`,
-                        top: `${displayCenterY - radius}px`,
-                        width: `${radius * 2}px`,
-                        height: `${radius * 2}px`,
-                        border: `2px solid ${obj.color || 'red'}`,
-                        borderRadius: "50%",
-                        pointerEvents: "none",
-                        zIndex: 1
-                      }}
-                    />
-                  );
-                })}
+              ) : null
+            ) : (
+              <div className="media-placeholder">
+                <i className="fas fa-image"></i>
+                <p>이미지나 영상을 업로드하세요</p>
+              </div>
+            )}
+          </div>
+
+          <div className="chat-section">
+            <h3>{selectedMedia ? `${selectedMedia.type === 'image' ? '이미지' : '영상'}에 대해 질문해보세요` : '미디어를 업로드하고 질문해보세요'}</h3>
+            <div className="chat-input-container">
+              <input
+                type="text"
+                value={chatMessage}
+                onChange={(e) => setChatMessage(e.target.value)}
+                placeholder="질문을 입력하세요..."
+                className="chat-input"
+              />
+              <button 
+                onClick={handleChat} 
+                className="chat-button"
+                disabled={!selectedMedia}
+              >
+                분석하기
+              </button>
+            </div>
+            {chatResponse && (
+              <div className="chat-response">
+                <p style={{ whiteSpace: 'pre-line' }}>{chatResponse}</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="youtube-input-container">
+          <div className="youtube-preview">
+            {selectedMedia && selectedMedia.type === 'video' && selectedMedia.url.includes('youtube.com') ? (
+              <video 
+                src={mediaUrl} 
+                controls 
+                className="selected-video"
+                ref={videoRef}
+              />
+            ) : (
+              <div className="youtube-placeholder">
+                <i className="fab fa-youtube"></i>
+                <p>YouTube 링크를 업로드하세요</p>
+              </div>
+            )}
+          </div>
+          <div className="youtube-controls">
+            <h3>YouTube URL</h3>
+            <div className="youtube-input-container">
+              <input
+                type="text"
+                value={youtubeUrl}
+                onChange={(e) => setYoutubeUrl(e.target.value)}
+                placeholder="YouTube URL을 입력하세요"
+                className="youtube-input"
+              />
+              <button 
+                className="youtube-button"
+                onClick={handleYoutubeProcess}
+                disabled={isProcessingYoutube}
+              >
+                <i className="fab fa-youtube"></i>
+                {isProcessingYoutube ? '처리 중...' : '분석하기'}
+              </button>
             </div>
           </div>
         </div>
-      )}
+
+        {mediaItems.length > 0 && (
+          <div className="media-grid">
+            {mediaItems.map(media => (
+              <div
+                key={media.id}
+                className={`media-item ${selectedMedia?.id === media.id ? 'selected' : ''}`}
+                onClick={() => handleMediaItemClick(media)}
+              >
+                {media.type === 'video' ? (
+                  <video src={media.url} className="media-preview" />
+                ) : (
+                  <img src={media.url} alt="Uploaded" className="media-preview" />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {noResults && (
+          <div className="no-results-message">
+            <i className="fas fa-search"></i>
+            <p>검색 결과가 없습니다.</p>
+            <p className="sub-text">다른 검색어를 입력하거나 OCR을 새로고침해보세요.</p>
+          </div>
+        )}
+
+        {summary && (
+          <div className="summary-container">
+            <div className="summary-content">
+              {summary.split('\n').map((line, index) => (
+                <p key={index}>{line}</p>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {timeline.length > 0 && (
+          <div className="timeline-container">
+            <h3>타임라인</h3>
+            <div className="timeline">
+              {timeline.map((item, index) => (
+                <div 
+                  key={index} 
+                  className="timeline-item"
+                  onClick={() => seekToTimestamp(item.timestamp)}
+                >
+                  <span className="timestamp">
+                    {Math.floor(item.timestamp / 60)}:{Math.floor(item.timestamp % 60).toString().padStart(2, '0')}
+                  </span>
+                  <div className="texts">
+                    {item.texts.map((text, i) => {
+                      const isMatch = searchTerm && text.text.toLowerCase().includes(searchTerm.toLowerCase());
+                      return (
+                        <div 
+                          key={i} 
+                          className="detected-text"
+                          style={{ 
+                            backgroundColor: isMatch ? 'rgba(0, 123, 255, 0.3)' : 'transparent'
+                          }}
+                        >
+                          {text.text}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {isModalOpen && selectedMedia && selectedMedia.type === 'image' && (
+          <div className="image-modal" onClick={() => {
+            setIsModalOpen(false);
+            setIsModalImageLoaded(false); // 모달 닫을 때 로딩 상태 초기화
+            // 모달이 닫힐 때 이미지 크기 복원
+            if (imageRef.current) {
+              imageRef.current.style.width = '100%';
+              imageRef.current.style.height = 'auto';
+              imageRef.current.style.maxHeight = '400px';
+            }
+          }}>
+            <div className="modal-content" onClick={e => e.stopPropagation()}>
+              <button className="modal-close" onClick={() => {
+                setIsModalOpen(false);
+                setIsModalImageLoaded(false); // 모달 닫을 때 로딩 상태 초기화
+                // 모달이 닫힐 때 이미지 크기 복원
+                if (imageRef.current) {
+                  imageRef.current.style.width = '100%';
+                  imageRef.current.style.height = 'auto';
+                  imageRef.current.style.maxHeight = '400px';
+                }
+              }}>×</button>
+              <div className="modal-image-container">
+                <img 
+                  ref={modalImageRef}
+                  src={mediaUrl} 
+                  alt="Full size" 
+                  style={{ width: '100%', height: 'auto' }}
+                  onLoad={handleModalImageLoad}
+                  loading="eager"
+                  decoding="async"
+                />
+                {!isModalImageLoaded && (
+                  <div className="modal-loading-overlay">
+                    <div className="modal-loading-content">
+                      <div className="loading-spinner"></div>
+                      <span>검색 결과 로딩 중...</span>
+                    </div>
+                  </div>
+                )}
+                {isModalImageLoaded && detectedObjects
+                  .filter(obj => obj.pageIndex === currentPage)
+                  .map((obj, index) => {
+                    if (!modalImageRef.current) return null;
+                    
+                    const imgElement = modalImageRef.current;
+                    const rect = imgElement.getBoundingClientRect();
+                    const bbox = obj.bbox;
+                    
+                    const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
+                    const scaleX = rect.width / imgElement.naturalWidth;
+                    const scaleY = rect.height / imgElement.naturalHeight;
+                    
+                    const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
+                    const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
+                    const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
+                    const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
+                    
+                    const centerX = (x1 + x2) / 2;
+                    const centerY = (y1 + y2) / 2;
+                    
+                    // 텍스트 크기에 비례하여 동그라미 크기 계산 (2배 크기)
+                    const textWidth = (x2 - x1) * scaleX;
+                    const textHeight = (y2 - y1) * scaleY;
+                    const radius = Math.max(textWidth, textHeight) * 0.6; // 텍스트 크기의 60%로 설정
+                    
+                    const displayCenterX = centerX * scaleX;
+                    const displayCenterY = centerY * scaleY;
+                    
+                    return (
+                      <div
+                        key={index}
+                        style={{
+                          position: 'absolute',
+                          left: `${displayCenterX - radius}px`,
+                          top: `${displayCenterY - radius}px`,
+                          width: `${radius * 2}px`,
+                          height: `${radius * 2}px`,
+                          border: `2px solid ${obj.color || 'red'}`,
+                          borderRadius: "50%",
+                          pointerEvents: "none",
+                          zIndex: 1
+                        }}
+                      />
+                    );
+                  })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

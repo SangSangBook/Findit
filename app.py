@@ -1206,15 +1206,21 @@ def download_youtube_video(url):
 @app.route('/process-youtube', methods=['POST'])
 def process_youtube():
     try:
-        url = request.form.get('url')
-        query = request.form.get('query', '')
-        mode = request.form.get('mode', 'normal')
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'JSON 데이터가 필요합니다'}), 400
+            
+        url = data.get('url')
+        query = data.get('query', '')
+        mode = data.get('mode', 'normal')
+        video_id = data.get('video_id', '')
         
         if not url:
             return jsonify({'error': 'URL이 필요합니다'}), 400
             
         print(f"=== YouTube 처리 시작 ===")
         print(f"URL: {url}")
+        print(f"Video ID: {video_id}")
         print(f"검색어: {query}")
         print(f"모드: {mode}")
         
@@ -1232,29 +1238,49 @@ def process_youtube():
                 # OCR 텍스트 가져오기
                 ocr_text = '\n'.join([f"=== {item['timestamp']}초 ===\n" + '\n'.join([text['text'] for text in item['texts']]) for item in timeline_results])
                 
+                # 세션 ID 생성
+                session_id = str(int(time.time()))
+                
+                # 세션에 비디오 정보 저장
+                if session_id not in ocr_results_cache:
+                    ocr_results_cache[session_id] = {
+                        'text': '',
+                        'coordinates': {},
+                        'videos': []
+                    }
+                
+                ocr_results_cache[session_id]['text'] = ocr_text
+                ocr_results_cache[session_id]['videos'].append({
+                    'filename': os.path.basename(video_info['filepath']),
+                    'file_url': f'/uploads/{os.path.basename(video_info["filepath"])}',
+                    'timeline': timeline_results
+                })
+                
                 response_data = {
                     'type': 'video',
                     'file_url': f'/uploads/{os.path.basename(video_info["filepath"])}',
                     'timeline': timeline_results,
                     'title': video_info['title'],
                     'duration': video_info['duration'],
-                    'ocr_text': ocr_text  # OCR 텍스트 추가
+                    'ocr_text': ocr_text,
+                    'session_id': session_id
                 }
                 print("응답 데이터 준비 완료")
                 return jsonify(response_data)
                 
-            finally:
-                # 처리 완료 후 파일 삭제
-                if os.path.exists(video_info['filepath']):
-                    print(f"임시 파일 삭제: {video_info['filepath']}")
-                    os.remove(video_info['filepath'])
+            except Exception as e:
+                print(f"비디오 처리 중 오류 발생: {str(e)}")
+                import traceback
+                print("상세 오류 정보:")
+                print(traceback.format_exc())
+                return jsonify({'error': f'비디오 처리 중 오류가 발생했습니다: {str(e)}'}), 500
                     
         except Exception as e:
-            print(f"비디오 처리 중 오류 발생: {str(e)}")
+            print(f"전체 처리 중 오류 발생: {str(e)}")
             import traceback
             print("상세 오류 정보:")
             print(traceback.format_exc())
-            return jsonify({'error': f'비디오 처리 중 오류가 발생했습니다: {str(e)}'}), 500
+            return jsonify({'error': f'처리 중 오류가 발생했습니다: {str(e)}'}), 500
                 
     except Exception as e:
         print(f"전체 처리 중 오류 발생: {str(e)}")
