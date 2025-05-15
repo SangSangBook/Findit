@@ -728,6 +728,60 @@ const App: React.FC = () => {
     console.log('smartSearchResult 변경됨:', smartSearchResult);
   }, [smartSearchResult]);
 
+  const handleActionClick = async (action: { message: string; action?: string }) => {
+    console.log('=== 액션 클릭 ===');
+    console.log('선택된 액션:', action);
+    
+    // action이 있으면 구글 검색으로 연결
+    if (action.action) {
+      const searchQuery = action.action.replace("Search for '", "").replace("'", "");
+      const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}`;
+      window.open(googleSearchUrl, '_blank');
+      return;
+    }
+    
+    // action이 없으면 기존 검색 로직 실행
+    try {
+      const formData = new FormData();
+      formData.append('query', action.message);
+      formData.append('mode', 'normal');
+      if (selectedMedia) {
+        formData.append('images[]', selectedMedia.file);
+      }
+      if (sessionId) {
+        formData.append('session_id', sessionId);
+      }
+
+      const response = await fetch('http://localhost:5001/analyze-image', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('액션 실행에 실패했습니다.');
+      }
+
+      const data = await response.json();
+      if (data.matches && data.matches.length > 0) {
+        const searchResults: DetectedObject[] = data.matches.map((obj: any) => ({
+          text: obj.text,
+          bbox: obj.bbox,
+          confidence: obj.confidence,
+          pageIndex: currentPage,
+          match_type: obj.match_type || 'exact'
+        }));
+        setDetectedObjects(searchResults);
+        setNoResults(false);
+      } else {
+        setDetectedObjects([]);
+        setNoResults(true);
+      }
+    } catch (error) {
+      console.error('액션 실행 중 오류:', error);
+      alert('액션 실행 중 오류가 발생했습니다.');
+    }
+  };
+
   if (isLoading) {
     return <NetflixLoader />;
   }
@@ -993,9 +1047,32 @@ const App: React.FC = () => {
                 <div>
                   <strong>추천 액션:</strong>
                   {smartSearchResult.action_recommendations.map((action, index) => (
-                    <div key={index} style={{ marginTop: '10px', padding: '10px', backgroundColor: '#fff', borderRadius: '4px' }}>
+                    <button
+                      key={index}
+                      onClick={() => handleActionClick(action)}
+                      style={{
+                        width: '100%',
+                        marginTop: '10px',
+                        padding: '10px',
+                        backgroundColor: '#fff',
+                        borderRadius: '4px',
+                        border: '1px solid #ddd',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        display: 'block'
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.backgroundColor = '#f0f0f0';
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.backgroundColor = '#fff';
+                        e.currentTarget.style.transform = 'translateY(0)';
+                      }}
+                    >
                       {index + 1}. {action.message}
-                    </div>
+                    </button>
                   ))}
                 </div>
               </>
