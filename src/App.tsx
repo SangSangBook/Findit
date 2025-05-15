@@ -51,6 +51,13 @@ interface SmartSearchResult {
     message: string;
     action?: string;
   }[];
+  document_type?: 'CONTRACT' | 'PAPER' | 'OTHER';
+  legal_updates?: {
+    title: string;
+    description: string;
+    source: string;
+    date: string;
+  }[];
 }
 
 const App: React.FC = () => {
@@ -687,7 +694,22 @@ const App: React.FC = () => {
             // 직접 상태 업데이트
             const result = {
                 predicted_keywords: data.smart_search.predicted_keywords,
-                action_recommendations: data.smart_search.action_recommendations
+                action_recommendations: data.smart_search.action_recommendations,
+                document_type: data.smart_search.document_type,
+                legal_updates: data.smart_search.document_type === 'CONTRACT' ? [
+                    {
+                        title: '2024년 계약 관련 주요 개정사항',
+                        description: '근로계약 기간 변경 및 갱신요구권 관련 개정이 예정되어 있습니다.',
+                        source: '고용노동부',
+                        date: '2024-01-15'
+                    },
+                    {
+                        title: '임대차 계약 갱신요구권 변경',
+                        description: '2025년부터 임대차 계약의 갱신요구권 행사 횟수가 제한됩니다.',
+                        source: '국토교통부',
+                        date: '2024-02-01'
+                    }
+                ] : []
             };
             console.log('업데이트할 결과:', result);
             setSmartSearchResult(result);
@@ -890,9 +912,18 @@ const App: React.FC = () => {
 
       <div className="right-section">
         <div className="media-container">
-          <div className={`selected-media ${selectedMedia && selectedMedia.type === 'image' ? 'has-media' : ''}`}>
+          <div className={`selected-media ${selectedMedia && selectedMedia.type === 'image' ? 'has-media' : ''}`} style={{ 
+            display: 'flex', 
+            flexDirection: 'column',
+            minHeight: '0',
+            height: '100%'
+          }}>
             {selectedMedia && selectedMedia.type === 'image' ? (
-              <div className="image-viewer">
+              <div className="image-viewer" style={{ 
+                flex: '1 1 auto',
+                minHeight: '0',
+                overflow: 'auto'
+              }}>
                 <div className="image-wrapper">
                   <div className="image-navigation">
                     <div className="nav-button-container">
@@ -916,6 +947,7 @@ const App: React.FC = () => {
                         ref={imageRef}
                         className={detectedObjects.length > 0 ? 'has-results' : ''}
                         onLoad={handleImageResize}
+                        style={{ maxHeight: 'calc(100vh - 300px)', objectFit: 'contain' }}
                       />
                       {detectedObjects.length > 0 && (
                         <div className="preview-overlay">
@@ -1010,6 +1042,40 @@ const App: React.FC = () => {
                 <p>이미지나 영상을 업로드하세요</p>
               </div>
             )}
+
+            {mediaItems.length > 0 && (
+              <div className="media-grid" style={{ 
+                marginTop: '20px',
+                display: 'flex',
+                justifyContent: 'center',
+                gap: '10px',
+                flexWrap: 'wrap',
+                width: '100%',
+                flex: '0 0 auto'
+              }}>
+                {mediaItems.map(media => (
+                  <div
+                    key={media.id}
+                    className={`media-item ${selectedMedia?.id === media.id ? 'selected' : ''}`}
+                    onClick={() => handleMediaItemClick(media)}
+                    style={{
+                      width: '100px',
+                      height: '100px',
+                      cursor: 'pointer',
+                      border: selectedMedia?.id === media.id ? '2px solid #007bff' : '1px solid #ddd',
+                      borderRadius: '4px',
+                      overflow: 'hidden'
+                    }}
+                  >
+                    {media.type === 'video' ? (
+                      <video src={media.url} className="media-preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ) : (
+                      <img src={media.url} alt="Uploaded" className="media-preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="chat-section">
@@ -1042,8 +1108,32 @@ const App: React.FC = () => {
               <>
                 <h3 style={{ marginBottom: '15px', color: '#333' }}>스마트 검색 결과</h3>
                 <div style={{ marginBottom: '15px' }}>
+                  <strong>문서 유형:</strong> {smartSearchResult.document_type === 'CONTRACT' ? '계약서' : 
+                    smartSearchResult.document_type === 'PAPER' ? '논문' : '기타'}
+                </div>
+                <div style={{ marginBottom: '15px' }}>
                   <strong>예측된 키워드:</strong> {smartSearchResult.predicted_keywords.join(', ')}
                 </div>
+                {smartSearchResult.document_type === 'CONTRACT' && smartSearchResult.legal_updates && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <h4 style={{ color: '#333', marginBottom: '10px' }}>관련 법령/개정 이슈</h4>
+                    {smartSearchResult.legal_updates.map((update, index) => (
+                      <div key={index} style={{ 
+                        marginBottom: '15px', 
+                        padding: '15px', 
+                        backgroundColor: '#fff', 
+                        borderRadius: '8px',
+                        border: '1px solid #e0e0e0'
+                      }}>
+                        <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>{update.title}</div>
+                        <div style={{ marginBottom: '5px' }}>{update.description}</div>
+                        <div style={{ fontSize: '0.9em', color: '#666' }}>
+                          출처: {update.source} ({update.date})
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div>
                   <strong>추천 액션:</strong>
                   {smartSearchResult.action_recommendations.map((action, index) => (
@@ -1125,24 +1215,6 @@ const App: React.FC = () => {
             </div>
           </div>
         </div>
-
-        {mediaItems.length > 0 && (
-          <div className="media-grid">
-            {mediaItems.map(media => (
-              <div
-                key={media.id}
-                className={`media-item ${selectedMedia?.id === media.id ? 'selected' : ''}`}
-                onClick={() => handleMediaItemClick(media)}
-              >
-                {media.type === 'video' ? (
-                  <video src={media.url} className="media-preview" />
-                ) : (
-                  <img src={media.url} alt="Uploaded" className="media-preview" />
-                )}
-              </div>
-            ))}
-          </div>
-        )}
 
         {noResults && (
           <div className="no-results-message">

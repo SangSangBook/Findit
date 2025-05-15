@@ -677,11 +677,9 @@ body {
   padding: 2rem;
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  margin-bottom: 2rem;
   height: fit-content;
   display: grid;
   grid-template-columns: 1fr;
-  gap: 2rem;
 }
 
 .selected-media.has-media {
