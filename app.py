@@ -1041,6 +1041,7 @@ def get_prompt_for_image_type(image_type, text):
 
 def get_smart_search_predictions(query: str, context: str) -> dict:
     """GPT를 사용하여 다음 검색어와 행동을 예측합니다."""
+    print(f"스마트 검색 시작: 검색어 '{query}'와 문맥 '{context}'를 기반으로 예측합니다.")
     prompt = f"""
     다음 검색어와 문맥을 바탕으로 예측을 해주세요:
     
@@ -1075,12 +1076,16 @@ def get_smart_search_predictions(query: str, context: str) -> dict:
         )
         
         result = json.loads(response.choices[0].message.content)
+        print(f"스마트 검색 결과: {result}")
         return result
     except Exception as e:
         print(f"Error in smart search prediction: {e}")
+        # 임시 더미 데이터 반환
         return {
-            "predicted_keywords": [],
-            "action_recommendations": []
+            "predicted_keywords": ["예시1", "예시2", "예시3"],
+            "action_recommendations": [
+                {"message": "이런 행동을 해보세요!", "action": "실행"}
+            ]
         }
 
 @app.route('/analyze-image', methods=['POST'])
