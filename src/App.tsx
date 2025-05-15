@@ -45,6 +45,14 @@ interface ApiResponse {
   original_text?: string;
 }
 
+interface SmartSearchResult {
+  predictedKeywords: string[];
+  actionRecommendations: {
+    message: string;
+    action?: string;
+  }[];
+}
+
 const App: React.FC = () => {
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
@@ -86,6 +94,9 @@ const App: React.FC = () => {
   const [selectedImageType, setSelectedImageType] = useState<ImageType>('OTHER');
   const [ocrText, setOcrText] = useState('');
   const youtubePlayerRef = useRef<HTMLIFrameElement>(null);
+  const [smartSearchResult, setSmartSearchResult] = useState<SmartSearchResult | null>(null);
+  const [isSmartSearching, setIsSmartSearching] = useState(false);
+  const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -634,6 +645,96 @@ const App: React.FC = () => {
     }
   };
 
+  const handleSmartSearch = async () => {
+    if (!searchTerm || !selectedMedia || !sessionId) {
+      setDetectedObjects([]);
+      setTimeline([]);
+      setNoResults(false);
+      setSearchResultPages([]);
+      setPageNotification({ show: false, direction: null });
+      setSmartSearchResult(null);
+      return;
+    }
+
+    setIsSmartSearching(true);
+    try {
+      const formData = new FormData();
+      formData.append('session_id', sessionId);
+      formData.append('query', searchTerm);
+      formData.append('mode', 'smart');
+      formData.append('images[]', selectedMedia.file);
+
+      const response = await fetch('http://localhost:5001/analyze-image', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || '검색 중 오류가 발생했습니다');
+      }
+
+      const data = await response.json();
+      
+      if (data.matches && data.matches.length > 0) {
+        const searchResults: DetectedObject[] = data.matches.map((obj: any) => ({
+          text: obj.text,
+          bbox: obj.bbox,
+          confidence: obj.confidence,
+          pageIndex: currentPage,
+          match_type: obj.match_type || 'exact'
+        }));
+        
+        setDetectedObjects(searchResults);
+        setNoResults(false);
+        setTimeline([]);
+
+        // 스마트 검색 결과 설정
+        if (data.smart_search) {
+          setSmartSearchResult(data.smart_search);
+        }
+
+        const pages = [currentPage];
+        setSearchResultPages(pages);
+        setPageNotification({ show: false, direction: null });
+      } else {
+        setDetectedObjects([]);
+        setNoResults(true);
+        setTimeline([]);
+        setSearchResultPages([]);
+        setPageNotification({ show: false, direction: null });
+        setSmartSearchResult(null);
+      }
+    } catch (error) {
+      console.error('검색 오류:', error);
+      setError(error instanceof Error ? error.message : '검색 중 오류가 발생했습니다');
+    } finally {
+      setIsSmartSearching(false);
+    }
+  };
+
+  // 이미지 크기 변경 감지 함수 추가
+  const handleImageResize = () => {
+    if (imageRef.current) {
+      const rect = imageRef.current.getBoundingClientRect();
+      setImageSize({
+        width: rect.width,
+        height: rect.height
+      });
+    }
+  };
+
+  // 이미지 크기 변경 감지를 위한 useEffect 추가
+  useEffect(() => {
+    const resizeObserver = new ResizeObserver(handleImageResize);
+    if (imageRef.current) {
+      resizeObserver.observe(imageRef.current);
+    }
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [imageRef.current]);
+
   if (isLoading) {
     return <NetflixLoader />;
   }
@@ -761,12 +862,13 @@ const App: React.FC = () => {
                         </div>
                       )}
                     </div>
-                    <div className="image-container">
+                    <div className="image-container" style={{ position: 'relative' }}>
                       <img 
                         src={mediaUrl} 
                         alt="Selected" 
                         ref={imageRef}
                         className={detectedObjects.length > 0 ? 'has-results' : ''}
+                        onLoad={handleImageResize}
                       />
                       {detectedObjects.length > 0 && (
                         <div className="preview-overlay">
@@ -787,6 +889,53 @@ const App: React.FC = () => {
                           </div>
                         </div>
                       )}
+                      {detectedObjects
+                        .filter(obj => obj.pageIndex === currentPage)
+                        .map((obj, index) => {
+                          if (!imageRef.current) return null;
+                          const imgElement = imageRef.current;
+                          const rect = imgElement.getBoundingClientRect();
+                          const bbox = obj.bbox;
+                          const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
+                          const scaleX = rect.width / imgElement.naturalWidth;
+                          const scaleY = rect.height / imgElement.naturalHeight;
+                          const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
+                          const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
+                          const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
+                          const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
+                          const lowerText = obj.text.toLowerCase();
+                          const lowerSearch = searchTerm.toLowerCase();
+                          const startIdx = lowerText.indexOf(lowerSearch);
+                          if (startIdx === -1) return null;
+                          const totalLen = obj.text.length;
+                          const searchLen = searchTerm.length;
+                          const charWidth = (x2 - x1) / totalLen;
+                          const wordX1 = x1 + charWidth * startIdx;
+                          const wordX2 = wordX1 + charWidth * searchLen;
+                          const centerX = (wordX1 + wordX2) / 2;
+                          const centerY = (y1 + y2) / 2;
+                          const textWidth = (wordX2 - wordX1) * scaleX;
+                          const textHeight = (y2 - y1) * scaleY;
+                          const radius = Math.max(textWidth, textHeight) * 0.5;
+                          const displayCenterX = centerX * scaleX;
+                          const displayCenterY = centerY * scaleY;
+                          return (
+                            <div
+                              key={index}
+                              style={{
+                                position: 'absolute',
+                                left: `${displayCenterX - radius}px`,
+                                top: `${displayCenterY - radius}px`,
+                                width: `${radius * 2}px`,
+                                height: `${radius * 2}px`,
+                                border: `2px solid red`,
+                                borderRadius: '50%',
+                                pointerEvents: 'none',
+                                zIndex: 1,
+                              }}
+                            />
+                          );
+                        })}
                     </div>
                     <div className="nav-button-container">
                       <button 
@@ -958,26 +1107,14 @@ const App: React.FC = () => {
         {isModalOpen && selectedMedia && selectedMedia.type === 'image' && (
           <div className="image-modal" onClick={() => {
             setIsModalOpen(false);
-            setIsModalImageLoaded(false); // 모달 닫을 때 로딩 상태 초기화
-            // 모달이 닫힐 때 이미지 크기 복원
-            if (imageRef.current) {
-              imageRef.current.style.width = '100%';
-              imageRef.current.style.height = 'auto';
-              imageRef.current.style.maxHeight = '400px';
-            }
+            setIsModalImageLoaded(false);
           }}>
             <div className="modal-content" onClick={e => e.stopPropagation()}>
               <button className="modal-close" onClick={() => {
                 setIsModalOpen(false);
-                setIsModalImageLoaded(false); // 모달 닫을 때 로딩 상태 초기화
-                // 모달이 닫힐 때 이미지 크기 복원
-                if (imageRef.current) {
-                  imageRef.current.style.width = '100%';
-                  imageRef.current.style.height = 'auto';
-                  imageRef.current.style.maxHeight = '400px';
-                }
+                setIsModalImageLoaded(false);
               }}>×</button>
-              <div className="modal-image-container">
+              <div className="modal-image-container" style={{ position: 'relative' }}>
                 <img 
                   ref={modalImageRef}
                   src={mediaUrl} 
@@ -999,31 +1136,32 @@ const App: React.FC = () => {
                   .filter(obj => obj.pageIndex === currentPage)
                   .map((obj, index) => {
                     if (!modalImageRef.current) return null;
-                    
                     const imgElement = modalImageRef.current;
                     const rect = imgElement.getBoundingClientRect();
                     const bbox = obj.bbox;
-                    
                     const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
                     const scaleX = rect.width / imgElement.naturalWidth;
                     const scaleY = rect.height / imgElement.naturalHeight;
-                    
                     const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
                     const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
                     const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
                     const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
-                    
-                    const centerX = (x1 + x2) / 2;
+                    const lowerText = obj.text.toLowerCase();
+                    const lowerSearch = searchTerm.toLowerCase();
+                    const startIdx = lowerText.indexOf(lowerSearch);
+                    if (startIdx === -1) return null;
+                    const totalLen = obj.text.length;
+                    const searchLen = searchTerm.length;
+                    const charWidth = (x2 - x1) / totalLen;
+                    const wordX1 = x1 + charWidth * startIdx;
+                    const wordX2 = wordX1 + charWidth * searchLen;
+                    const centerX = (wordX1 + wordX2) / 2;
                     const centerY = (y1 + y2) / 2;
-                    
-                    // 텍스트 크기에 비례하여 동그라미 크기 계산 (2배 크기)
-                    const textWidth = (x2 - x1) * scaleX;
+                    const textWidth = (wordX2 - wordX1) * scaleX;
                     const textHeight = (y2 - y1) * scaleY;
-                    const radius = Math.max(textWidth, textHeight) * 0.6; // 텍스트 크기의 60%로 설정
-                    
+                    const radius = Math.max(textWidth, textHeight) * 0.5;
                     const displayCenterX = centerX * scaleX;
                     const displayCenterY = centerY * scaleY;
-                    
                     return (
                       <div
                         key={index}
@@ -1033,15 +1171,52 @@ const App: React.FC = () => {
                           top: `${displayCenterY - radius}px`,
                           width: `${radius * 2}px`,
                           height: `${radius * 2}px`,
-                          border: `2px solid ${obj.color || 'red'}`,
-                          borderRadius: "50%",
-                          pointerEvents: "none",
-                          zIndex: 1
+                          border: `2px solid red`,
+                          borderRadius: '50%',
+                          pointerEvents: 'none',
+                          zIndex: 1,
                         }}
                       />
                     );
                   })}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* 스마트 검색 결과 표시 */}
+        {smartSearchResult && (
+          <div className="smart-search-results">
+            <div className="predicted-keywords">
+              <h4>🧠 다음에 이런 걸 찾아보세요</h4>
+              <div className="keyword-buttons">
+                {smartSearchResult.predictedKeywords.map((keyword, index) => (
+                  <button
+                    key={index}
+                    className="keyword-button"
+                    onClick={() => {
+                      setSearchTerm(keyword);
+                      handleSmartSearch();
+                    }}
+                  >
+                    {keyword}
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            <div className="action-recommendations">
+              <h4>💡 행동 제안</h4>
+              {smartSearchResult.actionRecommendations.map((recommendation, index) => (
+                <div key={index} className="recommendation-item">
+                  <p>{recommendation.message}</p>
+                  {recommendation.action && (
+                    <button className="action-button">
+                      {recommendation.action}
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
         )}

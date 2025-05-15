@@ -21,6 +21,7 @@ from google.cloud import vision
 from google.oauth2 import service_account
 import googlemaps
 import yt_dlp
+import json
 
 # Load environment variables from .env file
 load_dotenv()
@@ -1038,47 +1039,92 @@ def get_prompt_for_image_type(image_type, text):
     
     return prompts.get(image_type, prompts['OTHER'])
 
+def get_smart_search_predictions(query: str, context: str) -> dict:
+    """GPT를 사용하여 다음 검색어와 행동을 예측합니다."""
+    prompt = f"""
+    다음 검색어와 문맥을 바탕으로 예측을 해주세요:
+    
+    검색어: {query}
+    문맥: {context}
+    
+    1. 다음에 검색할 만한 키워드 3-5개를 예측해주세요.
+    2. 현재 상황에 대한 행동 제안을 해주세요.
+    
+    JSON 형식으로 응답해주세요:
+    {{
+        "predicted_keywords": ["키워드1", "키워드2", "키워드3"],
+        "action_recommendations": [
+            {{
+                "message": "행동 제안 메시지",
+                "action": "실행할 수 있는 행동 (선택사항)"
+            }}
+        ]
+    }}
+    """
+    
+    try:
+        client = openai.OpenAI()
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that predicts next search terms and suggests actions based on the current context."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=500
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        return result
+    except Exception as e:
+        print(f"Error in smart search prediction: {e}")
+        return {
+            "predicted_keywords": [],
+            "action_recommendations": []
+        }
+
 @app.route('/analyze-image', methods=['POST'])
 def analyze_image():
-    temp_path = None
     try:
-        print("=== analyze-image 요청 시작 ===")
+        session_id = request.form.get('session_id')
+        query = request.form.get('query')
+        mode = request.form.get('mode', 'normal')
+        files = request.files.getlist('images[]')
         
-        if 'images[]' not in request.files:
-            return jsonify({'error': '이미지가 없습니다.'}), 400
+        if not files or not query:
+            return jsonify({'error': '이미지와 검색어가 필요합니다'}), 400
             
-        file = request.files['images[]']
-        query = request.form.get('query', '')
-        
-        if not file or not query:
-            return jsonify({'error': '이미지와 검색어가 필요합니다.'}), 400
+        # OCR 처리
+        ocr_results = []
+        for file in files:
+            temp_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_image.jpg')
+            file.save(temp_path)
+            text_blocks = extract_text_with_vision(temp_path)
+            if text_blocks:
+                ocr_results.extend(text_blocks)
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
             
-        # 임시 파일로 저장
-        temp_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_image.jpg')
-        file.save(temp_path)
-        
-        # OCR 수행 (이제 리스트 반환)
-        text_blocks = extract_text_with_vision(temp_path)
-        
-        if not text_blocks:
-            return jsonify({'error': '텍스트를 인식할 수 없습니다.'}), 400
-        
-        # 검색어가 포함된 블록만 필터링
-        query_clean = query.strip().lower()
-        matches = [block for block in text_blocks if query_clean in block['text'].lower()]
-        
-        print(f"검색 결과: {len(matches)}개의 매칭된 텍스트 발견")
-        
+        # 검색어 매칭
+        matches = []
+        for result in ocr_results:
+            if query.lower() in result['text'].lower():
+                matches.append(result)
+            
+        # 스마트 검색 모드인 경우 GPT 예측 추가
+        smart_search = None
+        if mode == 'smart':
+            context = " ".join([result['text'] for result in ocr_results])
+            smart_search = get_smart_search_predictions(query, context)
+            
         return jsonify({
             'matches': matches,
-            'text': '\n'.join([block['text'] for block in text_blocks])
+            'smart_search': smart_search,
+            'session_id': session_id
         })
+        
     except Exception as e:
-        print(f"이미지 분석 오류: {str(e)}")
         return jsonify({'error': str(e)}), 500
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
 
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
