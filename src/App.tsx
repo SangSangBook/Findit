@@ -756,52 +756,15 @@ const App: React.FC = () => {
     
     // action이 있으면 구글 검색으로 연결
     if (action.action) {
-      const searchQuery = action.action.replace("Search for '", "").replace("'", "");
+      // "Search for" 텍스트 제거
+      const searchQuery = action.action.replace(/^Search for ['"]?/, '').replace(/['"]?$/, '');
       const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}`;
       window.open(googleSearchUrl, '_blank');
       return;
     }
     
-    // action이 없으면 기존 검색 로직 실행
-    try {
-      const formData = new FormData();
-      formData.append('query', action.message);
-      formData.append('mode', 'normal');
-      if (selectedMedia) {
-        formData.append('images[]', selectedMedia.file);
-      }
-      if (sessionId) {
-        formData.append('session_id', sessionId);
-      }
-
-      const response = await fetch('http://localhost:5001/analyze-image', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error('액션 실행에 실패했습니다.');
-      }
-
-      const data = await response.json();
-      if (data.matches && data.matches.length > 0) {
-        const searchResults: DetectedObject[] = data.matches.map((obj: any) => ({
-          text: obj.text,
-          bbox: obj.bbox,
-          confidence: obj.confidence,
-          pageIndex: currentPage,
-          match_type: obj.match_type || 'exact'
-        }));
-        setDetectedObjects(searchResults);
-        setNoResults(false);
-      } else {
-        setDetectedObjects([]);
-        setNoResults(true);
-      }
-    } catch (error) {
-      console.error('액션 실행 중 오류:', error);
-      alert('액션 실행 중 오류가 발생했습니다.');
-    }
+    // action이 없는 경우 메시지만 표시
+    alert(action.message);
   };
 
   if (isLoading) {

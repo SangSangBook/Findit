@@ -26,26 +26,36 @@ import json
 # Load environment variables from .env file
 load_dotenv()
 
+# 환경 변수 디버깅
+print("\n=== 환경 변수 확인 ===")
+print(f"OPENAI_API_KEY: {os.getenv('OPENAI_API_KEY')}")
+print(f"GOOGLE_CLOUD_VISION_API_KEY: {os.getenv('GOOGLE_CLOUD_VISION_API_KEY')}")
+print(f"GOOGLE_APPLICATION_CREDENTIALS: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}")
+print("=====================\n")
+
 # OpenAI API 키 설정
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
     print("경고: OPENAI_API_KEY가 설정되지 않았습니다.")
 else:
     print(f"OpenAI API 키가 설정되었습니다. (길이: {len(OPENAI_API_KEY)}자)")
-    openai.api_key = OPENAI_API_KEY
+
+# OpenAI 클라이언트 초기화
+client = OpenAI(api_key=OPENAI_API_KEY)  # API 키를 명시적으로 전달
 
 # Google Cloud Vision API 설정
 API_KEY = os.getenv('GOOGLE_CLOUD_VISION_API_KEY')
+if not API_KEY:
+    print("경고: GOOGLE_CLOUD_VISION_API_KEY가 설정되지 않았습니다.")
+else:
+    print(f"Google Vision API 키가 설정되었습니다. (길이: {len(API_KEY)}자)")
 VISION_API_URL = f'https://vision.googleapis.com/v1/images:annotate?key={API_KEY}'
 
 # 연관어 캐시
 related_words_cache = {}
 
-# OpenAI 클라이언트 초기화
-client = OpenAI()  # 환경 변수에서 자동으로 API 키를 가져옴
-
 # Google Maps 클라이언트 초기화
-gmaps = googlemaps.Client(key=os.getenv('GOOGLE_CLOUD_VISION_API_KEY'))
+gmaps = googlemaps.Client(key=API_KEY)  # Vision API와 동일한 키 사용
 
 # Google Cloud Vision 클라이언트 초기화
 try:
@@ -378,10 +388,21 @@ def extract_text_with_vision(image_path):
             ]
         }
         
-        # API 호출
-        response = requests.post(VISION_API_URL, json=request_data)
-        response.raise_for_status()
-        result = response.json()
+        # API 호출 - vision_client 사용
+        if vision_client:
+            image = vision.Image(content=content)
+            response = vision_client.text_detection(image=image)
+            result = response.to_dict()
+        else:
+            # vision_client가 없는 경우 HTTP 요청 사용
+            current_api_key = os.getenv('GOOGLE_CLOUD_VISION_API_KEY')
+            if not current_api_key:
+                raise ValueError("Google Cloud Vision API 키가 설정되지 않았습니다.")
+            
+            vision_api_url = f'https://vision.googleapis.com/v1/images:annotate?key={current_api_key}'
+            response = requests.post(vision_api_url, json=request_data)
+            response.raise_for_status()
+            result = response.json()
         
         if 'responses' not in result or not result['responses'] or 'textAnnotations' not in result['responses'][0]:
             return []
@@ -1064,7 +1085,6 @@ def get_smart_search_predictions(query: str, context: str) -> dict:
     """
     
     try:
-        client = openai.OpenAI()
         response = client.chat.completions.create(
             model="gpt-4",
             messages=[
@@ -1141,7 +1161,7 @@ def chat():
     user_message = data.get('message', '')
     
     try:
-        # OpenAI API를 사용하여 메시지 처리
+        # 전역 client 객체 사용
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -1348,6 +1368,7 @@ def getInfoFromTextWithOpenAI(text: str) -> str | None:
     if not text.strip():
         return '정보를 추출할 텍스트가 제공되지 않았습니다.'
     try:
+        # 전역 client 객체 사용
         completion = client.chat.completions.create(
             model='gpt-3.5-turbo',
             messages=[
