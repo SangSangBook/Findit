@@ -104,6 +104,7 @@ const App: React.FC = () => {
   const [smartSearchResult, setSmartSearchResult] = useState<SmartSearchResult | null>(null);
   const [isSmartSearching, setIsSmartSearching] = useState(false);
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
+  const [modalImageSize, setModalImageSize] = useState({ width: 0, height: 0 });
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -779,6 +780,28 @@ const App: React.FC = () => {
     e.preventDefault();
   };
 
+  // 모달 이미지 크기 변경 감지 함수
+  const handleModalImageResize = () => {
+    if (modalImageRef.current) {
+      const rect = modalImageRef.current.getBoundingClientRect();
+      setModalImageSize({
+        width: rect.width,
+        height: rect.height
+      });
+    }
+  };
+
+  // 모달 이미지 크기 변경 감지를 위한 useEffect
+  useEffect(() => {
+    const resizeObserver = new ResizeObserver(handleModalImageResize);
+    if (modalImageRef.current) {
+      resizeObserver.observe(modalImageRef.current);
+    }
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [modalImageRef.current]);
+
   if (isLoading) {
     return <NetflixLoader />;
   }
@@ -1269,6 +1292,109 @@ const App: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* 이미지 확대 보기 모달 */}
+      {isModalOpen && (
+        <div 
+          className="modal-overlay"
+          onClick={() => setIsModalOpen(false)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.9)',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            zIndex: 1000
+          }}
+        >
+          <div 
+            className="modal-content"
+            onClick={e => e.stopPropagation()}
+            style={{
+              position: 'relative',
+              maxWidth: '90vw',
+              maxHeight: '90vh'
+            }}
+          >
+            <button
+              onClick={() => setIsModalOpen(false)}
+              style={{
+                position: 'absolute',
+                top: '-40px',
+                right: '0',
+                background: 'none',
+                border: 'none',
+                fontSize: '24px',
+                cursor: 'pointer',
+                color: 'white'
+              }}
+            >
+              ×
+            </button>
+            <img 
+              ref={modalImageRef}
+              src={mediaUrl} 
+              alt="Enlarged view" 
+              style={{
+                maxWidth: '100%',
+                maxHeight: '90vh',
+                objectFit: 'contain'
+              }}
+              onLoad={handleModalImageResize}
+            />
+            {detectedObjects
+              .filter(obj => obj.pageIndex === currentPage)
+              .map((obj, index) => {
+                if (!modalImageRef.current) return null;
+                const imgElement = modalImageRef.current;
+                const bbox = obj.bbox;
+                const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
+                const scaleX = modalImageSize.width / imgElement.naturalWidth;
+                const scaleY = modalImageSize.height / imgElement.naturalHeight;
+                const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
+                const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
+                const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
+                const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
+                const lowerText = obj.text.toLowerCase();
+                const lowerSearch = searchTerm.toLowerCase();
+                const startIdx = lowerText.indexOf(lowerSearch);
+                if (startIdx === -1) return null;
+                const totalLen = obj.text.length;
+                const searchLen = searchTerm.length;
+                const charWidth = (x2 - x1) / totalLen;
+                const wordX1 = x1 + charWidth * startIdx;
+                const wordX2 = wordX1 + charWidth * searchLen;
+                const centerX = (wordX1 + wordX2) / 2;
+                const centerY = (y1 + y2) / 2;
+                const textWidth = (wordX2 - wordX1) * scaleX;
+                const textHeight = (y2 - y1) * scaleY;
+                const radius = Math.max(textWidth, textHeight) * 0.5;
+                const displayCenterX = centerX * scaleX;
+                const displayCenterY = centerY * scaleY;
+                return (
+                  <div
+                    key={index}
+                    style={{
+                      position: 'absolute',
+                      left: `${displayCenterX - radius}px`,
+                      top: `${displayCenterY - radius}px`,
+                      width: `${radius * 2}px`,
+                      height: `${radius * 2}px`,
+                      border: `2px solid red`,
+                      borderRadius: '50%',
+                      pointerEvents: 'none',
+                      zIndex: 1,
+                    }}
+                  />
+                );
+              })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
