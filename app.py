@@ -600,7 +600,7 @@ def semantic_similarity(text1, text2):
     
     return intersection / union if union > 0 else 0.0
 
-def extract_frames_from_video(video_path, interval=1.0, max_frames=None):
+def extract_frames_from_video(video_path, interval=2.0, max_frames=None):
     """비디오에서 일정 간격으로 프레임 추출"""
     frames = []
     timestamps = []
@@ -608,7 +608,7 @@ def extract_frames_from_video(video_path, interval=1.0, max_frames=None):
     
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_interval = int(fps * interval)
+    frame_interval = int(fps * interval)  # 2초마다 프레임 추출
     
     # 최대 프레임 수 계산
     if max_frames and total_frames > max_frames:
@@ -646,8 +646,8 @@ def process_video(video_path, query, mode='normal'):
     cap.release()
     
     # 비디오 길이에 따라 최대 프레임 수 조정
-    max_frames = min(100, int(duration * 2))  # 최대 100프레임 또는 2초당 1프레임
-    frames, timestamps = extract_frames_from_video(video_path, interval=1.0, max_frames=max_frames)
+    max_frames = min(50, int(duration))  # 최대 50프레임 또는 1초당 1프레임
+    frames, timestamps = extract_frames_from_video(video_path, interval=2.0, max_frames=max_frames)
     
     timeline_results = []
     all_ocr_text = []  # 모든 OCR 텍스트를 저장할 리스트
@@ -680,8 +680,8 @@ def process_video(video_path, query, mode='normal'):
         
         print(f"연관어 목록: {related_words}")
     
-    # 배치 처리할 프레임 수
-    batch_size = 5
+    # 배치 처리할 프레임 수 증가
+    batch_size = 10  # 배치 크기를 10으로 증가
     for i in range(0, len(frames), batch_size):
         batch_frames = frames[i:i+batch_size]
         batch_timestamps = timestamps[i:i+batch_size]
@@ -1231,7 +1231,7 @@ def download_youtube_video(url):
             
             # yt-dlp 옵션 설정
             ydl_opts = {
-                'format': 'best[height<=720]',  # 720p 이하의 최상의 품질
+                'format': 'best[height<=480]',  # 480p 이하의 최상의 품질로 변경
                 'outtmpl': filepath,
                 'quiet': False,
                 'no_warnings': False,

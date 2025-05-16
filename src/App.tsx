@@ -767,12 +767,49 @@ const App: React.FC = () => {
     alert(action.message);
   };
 
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      handleFileUpload({ target: { files } } as React.ChangeEvent<HTMLInputElement>);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
   if (isLoading) {
     return <NetflixLoader />;
   }
 
   return (
-    <div className="App">
+    <div 
+      className="App"
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      style={{
+        position: 'relative',
+        minHeight: '100vh'
+      }}
+    >
+      {/* 드래그 오버 시 표시될 오버레이 */}
+      <div 
+        className="drag-overlay"
+        style={{
+          display: 'none',
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 123, 255, 0.1)',
+          border: '3px dashed #007bff',
+          zIndex: 1000,
+          pointerEvents: 'none'
+        }}
+      />
+
       <div className="left-section">
         <div className="app-logo">Findit!</div>
         <div className="app-subtitle">미디어에서{'\n'}정보를{'\n'}찾아주세요</div>
