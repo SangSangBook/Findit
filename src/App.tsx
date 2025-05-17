@@ -929,7 +929,7 @@ const App: React.FC = () => {
           className="toggle-button" 
           onClick={() => setIsSearchExpanded(!isSearchExpanded)}
         >
-          {isSearchExpanded ? '◀' : '▶'}
+          <i className={`fas fa-chevron-${isSearchExpanded ? 'left' : 'right'}`} style={{ fontSize: '30px' }}></i>
         </button>
       </div>
 
