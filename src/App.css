@@ -757,7 +757,7 @@ body {
 }
 
 .chat-button:hover {
-  background-color: #4338CA;
+  background-color: rgb(125, 125, 125);
   transform: translateY(-1px);
 }
 
@@ -851,7 +851,7 @@ body {
 
 .youtube-button {
   padding: 1rem 2rem;
-  background-color: var(--primary);
+  background-color: black;
   color: white;
   border: none;
   border-radius: var(--radius);
@@ -867,7 +867,7 @@ body {
 }
 
 .youtube-button:hover {
-  background-color: var(--primary-light);
+  background-color: rgb(125, 125, 125);
   transform: translateY(-1px);
 }
 
@@ -1742,7 +1742,7 @@ body {
 
 .chat-button {
   padding: 1rem 2rem;
-  background-color: var(--primary);
+  background-color: black;
   color: white;
   border: none;
   border-radius: var(--radius);
@@ -1754,7 +1754,7 @@ body {
 }
 
 .chat-button:hover {
-  background-color: var(--primary-light);
+  background-color: rgb(125, 125, 125);
   transform: translateY(-1px);
 }
 
