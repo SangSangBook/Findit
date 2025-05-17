@@ -77,48 +77,6 @@
   align-items: center;
 }
 
-.magnifying-glass {
-  position: relative;
-  width: 120px;
-  height: 120px;
-  animation: magnify 2s infinite;
-}
-
-.glass-circle {
-  position: absolute;
-  width: 105px;
-  height: 105px;
-  border: 8px solid #ff1a1a;
-  border-radius: 50%;
-  top: 0;
-  left: 0;
-  animation: pulse 2s infinite;
-}
-
-.glass-handle {
-  position: absolute;
-  width: 8px;
-  height: 60px;
-  background-color: #ff1a1a;
-  bottom: -20px;
-  right: 20px;
-  transform: rotate(-45deg);
-  transform-origin: top;
-  animation: handle-pulse 2s infinite;
-}
-
-@keyframes magnify {
-  0% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.2);
-  }
-  100% {
-    transform: scale(1);
-  }
-}
-
 @keyframes pulse {
   0% {
     transform: scale(1);

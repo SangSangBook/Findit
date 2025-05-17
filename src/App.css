@@ -2,18 +2,6 @@
  * Twitter: @kootoopas
  */
 
-/* Exo thin font from Google. */
-@import url(https://fonts.googleapis.com/css?family=Exo:100);
-
-/* Lexend Deca font from Google */
-@import url('https://fonts.googleapis.com/css?family=Lexend+Deca&display=swap');
-
-/* Modern UI Design */
-@import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&display=swap');
-
-/* Poppins font for wave effect */
-@import url("https://fonts.googleapis.com/css?family=Poppins:100,200,300,400,500,600,700,800,900");
-
 /* Background data (Original source: https://subtlepatterns.com/grid-me/) */
 :root {
   --bg-url: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAIAAACRXR/mAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAIGNIUk0AAHolAACAgwAA+f8AAIDpAAB1MAAA6mAAADqYAAAXb5JfxUYAAABnSURBVHja7M5RDYAwDEXRDgmvEocnlrQS2SwUFST9uEfBGWs9c97nbGtDcquqiKhOImLs/UpuzVzWEi1atGjRokWLFi1atGjRokWLFi1atGjRokWLFi1af7Ukz8xWp8z8AAAA//8DAJ4LoEAAlL1nAAAAAElFTkSuQmCC");
@@ -93,7 +81,7 @@
 body {
   margin-top: 1rem;
   color: #999;
-  font: 400 16px/1.5 exo, ubuntu, "segoe ui", helvetica, arial, sans-serif;
+  font: 400 16px/1.5 "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
   text-align: center;
   background: #F5F5F5;
 }
@@ -107,6 +95,7 @@ body {
   min-height: 100vh;
   position: relative;
   overflow-x: hidden;
+  font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
 }
 
 /* Left section */
@@ -127,10 +116,10 @@ body {
 }
 
 .app-logo {
-  font-family: "Poppins", sans-serif;
+  font-family: "Yde street", sans-serif;
   font-size: 5rem;
   font-weight: 700;
-  color: var(--primary);
+  color: black;
   margin-top: 3rem;
   text-align: left;
   width: 100%;
@@ -154,7 +143,7 @@ body {
 .upload-button {
   width: 100%;
   padding: 1rem;
-  background-color: var(--primary);
+  background-color: #4299E2;
   color: white;
   border: none;
   border-radius: var(--radius);
@@ -244,7 +233,7 @@ body {
   left: 0;
   right: 0;
   height: 15px;
-  background: var(--primary);
+  background: #46B876;
   transition: opacity 0.3s ease;
 }
 
@@ -254,7 +243,7 @@ body {
   top: 0;
   width: 50px;
   height: 120px;
-  background: var(--primary);
+  background: #46B876;
   border: none;
   color: white;
   cursor: pointer;
@@ -588,10 +577,6 @@ body {
   background-color: rgba(0, 123, 255, 0.1);
 }
 
-.search-button.smart-search .left-side {
-  background-color: var(--smart-primary);
-}
-
 .search-button.smart-search .magnifying-glass {
   border-color: var(--smart-accent);
 }
@@ -611,7 +596,6 @@ body {
 
 .summarize-button {
   background-color: #4CAF50;
-  margin-left: 10px;
 }
 
 .summarize-button:disabled {
@@ -1008,15 +992,15 @@ body {
   right: 0;
   width: 30px;
   height: 100%;
-  background: var(--primary);
+  background: #46B876;
 }
 
 .search-button.smart-search::after {
-  background: var(--secondary);
+  background: #c0fdd9;
 }
 
 .search-button.summarize-button::after {
-  background: #4CAF50;
+  background: #4299E2;
 }
 
 .search-button:hover {
@@ -1025,7 +1009,7 @@ body {
   box-shadow: var(--shadow);
 }
 
-.search-button .left-side {
+/* .search-button .left-side {
   width: 48px;
   height: 48px;
   border-radius: 12px;
@@ -1035,7 +1019,7 @@ body {
   justify-content: center;
   margin-right: 1rem;
   flex-shrink: 0;
-}
+} */
 
 .search-button .right-side {
   flex: 1;
@@ -1051,10 +1035,6 @@ body {
 .search-button .description {
   font-size: 0.875rem;
   color: var(--text-secondary);
-}
-
-.search-button.smart-search .left-side {
-  background: var(--secondary);
 }
 
 /* Summary Section */
