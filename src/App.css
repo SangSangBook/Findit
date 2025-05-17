@@ -363,6 +363,7 @@ body {
 .text {
   color: #333;
   flex-grow: 1;
+  text-align: left;
 }
 
 .no-results {
@@ -533,8 +534,9 @@ body {
 .timeline-container {
   margin-top: 2rem;
   padding: 1rem;
-  border: 1px solid #ddd;
-  border-radius: 8px;
+  border: px solid #ddd;
+  border-radius: 15px;
+  background-color: #F5F5F5;
 }
 
 .timeline {
@@ -544,8 +546,8 @@ body {
 
 .timeline-item {
   display: flex;
-  padding: 0.5rem;
   border-bottom: 1px solid #eee;
+  margin-bottom: 10px;
   cursor: pointer;
   transition: background-color 0.2s;
 }
@@ -555,14 +557,16 @@ body {
 }
 
 .timestamp {
+  margin-left: 15px;
   min-width: 60px;
   font-weight: bold;
-  color: #666;
+  color: #8E8E8E;
 }
 
 .texts {
   flex: 1;
   margin-left: 1rem;
+  text-align: left;
 }
 
 .detected-text {

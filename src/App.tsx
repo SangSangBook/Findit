@@ -1259,7 +1259,7 @@ const App: React.FC = () => {
 
         {timeline.length > 0 && (
           <div className="timeline-container">
-            <h3>타임라인</h3>
+            <h3 style={{ textAlign: 'left', marginTop: '10px', marginBottom: '30px' ,marginLeft: '10px' }}>타임라인</h3>
             <div className="timeline">
               {timeline.map((item, index) => (
                 <div 
