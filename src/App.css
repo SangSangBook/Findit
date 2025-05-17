@@ -157,8 +157,12 @@ body {
   gap: 0.5rem;
 }
 
+.upload-button:nth-child(3) {
+  background-color: #46B876;
+}
+
 .upload-button:hover {
-  background-color: var(--primary-light);
+  background-color: rgb(125,125,125);
   transform: translateY(-2px);
 }
 
