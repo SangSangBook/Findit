@@ -116,6 +116,7 @@ const App: React.FC = () => {
   const [modalImageSize, setModalImageSize] = useState({ width: 0, height: 0 });
   const [taskSuggestions, setTaskSuggestions] = useState<TaskSuggestion[]>([]);
   const [isTaskSuggesting, setIsTaskSuggesting] = useState(false);
+  const [ocrCache, setOcrCache] = useState<Map<string, {text: string, objects: DetectedObject[]}>>(new Map());
 
   const getTaskSuggestions = async (text: string) => {
     console.log('=== 태스크 제안 시작 ===');
@@ -351,11 +352,24 @@ const App: React.FC = () => {
     console.log('현재 페이지:', currentPage);
 
     try {
+      const cachedResult = ocrCache.get(selectedMedia.id);
+      console.log('캐시된 OCR 결과:', cachedResult);
+      
       const formData = new FormData();
       formData.append('session_id', sessionId);
       formData.append('query', searchTerm);
       formData.append('mode', mode);
-      formData.append('images[]', selectedMedia.file);
+      
+      if (cachedResult) {
+        formData.append('ocr_text', cachedResult.text);
+        formData.append('detected_objects', JSON.stringify(cachedResult.objects));
+      } else {
+        formData.append('images[]', selectedMedia.file);
+      }
+
+      if (mode === 'smart') {
+        formData.append('smart_search', 'true');
+      }
 
       const response = await fetch('http://localhost:5001/analyze-image', {
         method: 'POST',
@@ -371,20 +385,34 @@ const App: React.FC = () => {
       console.log('=== 서버 응답 데이터 ===');
       console.log('전체 데이터:', JSON.stringify(data, null, 2));
       
+      if (data.ocr_text && data.objects && !cachedResult) {
+        console.log('새로운 OCR 결과를 캐시에 저장');
+        setOcrCache(prev => new Map(prev).set(selectedMedia.id, {
+          text: data.ocr_text,
+          objects: data.objects
+        }));
+      }
+      
       if (data.matches && data.matches.length > 0) {
         console.log('검색 결과 매칭:', data.matches);
-        const searchResults: DetectedObject[] = data.matches.map((obj: any) => {
-          console.log('매칭된 객체:', obj);
-          // match_type이 없으면 semantic으로 설정
-          const matchType = obj.match_type || 'semantic';
-          return {
-            text: obj.text,
-            bbox: obj.bbox,
-            confidence: obj.confidence,
-            pageIndex: currentPage,
-            match_type: matchType
-          };
-        });
+        const searchResults: DetectedObject[] = data.matches
+          .filter((obj: any) => {
+            // 정확한 일치 또는 의미적으로 관련된 매치만 포함
+            const isExactMatch = obj.text.toLowerCase().includes(searchTerm.toLowerCase());
+            const isRelevantMatch = obj.match_type === 'semantic' && obj.confidence > 0.7;
+            return isExactMatch || isRelevantMatch;
+          })
+          .map((obj: any) => {
+            console.log('매칭된 객체:', obj);
+            const matchType = obj.text.toLowerCase().includes(searchTerm.toLowerCase()) ? 'exact' : 'semantic';
+            return {
+              text: obj.text,
+              bbox: obj.bbox,
+              confidence: obj.confidence,
+              pageIndex: currentPage,
+              match_type: matchType
+            };
+          });
         
         console.log('변환된 검색 결과:', searchResults);
         setDetectedObjects(searchResults);
@@ -413,7 +441,6 @@ const App: React.FC = () => {
     const newSearchTerm = e.target.value;
     setSearchTerm(newSearchTerm);
     
-    // 검색어가 비어있을 때 검색 결과만 초기화
     if (newSearchTerm === '') {
       setDetectedObjects([]);
       setNoResults(false);
@@ -628,7 +655,6 @@ const App: React.FC = () => {
         throw new Error(data.error);
       }
 
-      // YouTube 비디오 아이템 생성
       const newVideoItem: MediaItem = {
         id: Date.now().toString(),
         type: 'video',
@@ -637,14 +663,12 @@ const App: React.FC = () => {
         sessionId: data.session_id
       };
 
-      // 비디오 그리드에 추가
       setVideoItems(prev => [...prev, newVideoItem]);
       setSelectedVideo(newVideoItem);
       setMediaType('video');
       setMediaUrl(videoId);
       setYoutubeUrl('');
 
-      // OCR 텍스트가 있으면 태스크 제안 실행
       if (data.ocr_text) {
         console.log('=== OCR 텍스트 추출 완료 ===');
         console.log('OCR 텍스트:', data.ocr_text);
@@ -654,12 +678,10 @@ const App: React.FC = () => {
         await getTaskSuggestions(data.ocr_text);
       }
       
-      // 타임라인 설정
       if (data.timeline) {
         setTimeline(data.timeline);
       }
       
-      // 세션 ID 설정
       if (data.session_id) {
         setSessionId(data.session_id);
       }
@@ -1056,25 +1078,20 @@ const App: React.FC = () => {
                         const rect = imgElement.getBoundingClientRect();
                         const bbox = obj.bbox;
                         
-                        // bbox 좌표가 정규화되어 있는지 확인
                         const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
                         
-                        // 이미지 크기에 맞게 좌표 변환
                         const scaleX = rect.width / imgElement.naturalWidth;
                         const scaleY = rect.height / imgElement.naturalHeight;
                         
-                        // bbox 좌표를 실제 픽셀 좌표로 변환
                         const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
                         const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
                         const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
                         const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
                         
-                        // 검색어와 일치하는 부분 찾기
                         const lowerText = obj.text.toLowerCase();
                         const lowerSearch = searchTerm.toLowerCase();
                         const startIdx = lowerText.indexOf(lowerSearch);
                         
-                        // 의미적 매칭인 경우 전체 텍스트에 동그라미 그리기
                         if (obj.match_type === 'semantic') {
                           const centerX = (x1 + x2) / 2;
                           const centerY = (y1 + y2) / 2;
@@ -1104,7 +1121,6 @@ const App: React.FC = () => {
                           );
                         }
                         
-                        // 정확한 매칭인 경우 검색어 위치에만 동그라미 그리기
                         if (startIdx === -1) return null;
                         
                         const totalLen = obj.text.length;
@@ -1336,7 +1352,6 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* 비디오 그리드 */}
         {videoItems.length > 0 && (
           <div className="video-grid" style={{
             marginTop: '20px',
@@ -1489,25 +1504,20 @@ const App: React.FC = () => {
                 const rect = imgElement.getBoundingClientRect();
                 const bbox = obj.bbox;
                 
-                // bbox 좌표가 정규화되어 있는지 확인
                 const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
                 
-                // 이미지 크기에 맞게 좌표 변환
                 const scaleX = rect.width / imgElement.naturalWidth;
                 const scaleY = rect.height / imgElement.naturalHeight;
                 
-                // bbox 좌표를 실제 픽셀 좌표로 변환
                 const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
                 const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
                 const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
                 const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
                 
-                // 검색어와 일치하는 부분 찾기
                 const lowerText = obj.text.toLowerCase();
                 const lowerSearch = searchTerm.toLowerCase();
                 const startIdx = lowerText.indexOf(lowerSearch);
                 
-                // 의미적 매칭인 경우 전체 텍스트에 동그라미 그리기
                 if (obj.match_type === 'semantic') {
                   const centerX = (x1 + x2) / 2;
                   const centerY = (y1 + y2) / 2;
@@ -1537,7 +1547,6 @@ const App: React.FC = () => {
                   );
                 }
                 
-                // 정확한 매칭인 경우 검색어 위치에만 동그라미 그리기
                 if (startIdx === -1) return null;
                 
                 const totalLen = obj.text.length;
