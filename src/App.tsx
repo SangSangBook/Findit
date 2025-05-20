@@ -372,15 +372,21 @@ const App: React.FC = () => {
       console.log('전체 데이터:', JSON.stringify(data, null, 2));
       
       if (data.matches && data.matches.length > 0) {
-        const searchResults: DetectedObject[] = data.matches.map((obj: any) => ({
-          text: obj.text,
-          bbox: obj.bbox,
-          confidence: obj.confidence,
-          pageIndex: currentPage,
-          match_type: obj.match_type || 'exact'
-        }));
+        console.log('검색 결과 매칭:', data.matches);
+        const searchResults: DetectedObject[] = data.matches.map((obj: any) => {
+          console.log('매칭된 객체:', obj);
+          // match_type이 없으면 semantic으로 설정
+          const matchType = obj.match_type || 'semantic';
+          return {
+            text: obj.text,
+            bbox: obj.bbox,
+            confidence: obj.confidence,
+            pageIndex: currentPage,
+            match_type: matchType
+          };
+        });
         
-        console.log('검색 결과:', searchResults);
+        console.log('변환된 검색 결과:', searchResults);
         setDetectedObjects(searchResults);
         setNoResults(false);
         setTimeline([]);
@@ -390,6 +396,7 @@ const App: React.FC = () => {
         setSearchResultPages(pages);
         setPageNotification({ show: false, direction: null });
       } else {
+        console.log('검색 결과 없음');
         setDetectedObjects([]);
         setNoResults(true);
         setTimeline([]);
@@ -1048,39 +1055,84 @@ const App: React.FC = () => {
                         const imgElement = imageRef.current;
                         const rect = imgElement.getBoundingClientRect();
                         const bbox = obj.bbox;
+                        
+                        // bbox 좌표가 정규화되어 있는지 확인
                         const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
+                        
+                        // 이미지 크기에 맞게 좌표 변환
                         const scaleX = rect.width / imgElement.naturalWidth;
                         const scaleY = rect.height / imgElement.naturalHeight;
+                        
+                        // bbox 좌표를 실제 픽셀 좌표로 변환
                         const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
                         const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
                         const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
                         const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
+                        
+                        // 검색어와 일치하는 부분 찾기
                         const lowerText = obj.text.toLowerCase();
                         const lowerSearch = searchTerm.toLowerCase();
                         const startIdx = lowerText.indexOf(lowerSearch);
+                        
+                        // 의미적 매칭인 경우 전체 텍스트에 동그라미 그리기
+                        if (obj.match_type === 'semantic') {
+                          const centerX = (x1 + x2) / 2;
+                          const centerY = (y1 + y2) / 2;
+                          const width = x2 - x1;
+                          const height = y2 - y1;
+                          const radius = Math.max(width, height) * 0.15;
+                          
+                          const displayCenterX = centerX * scaleX;
+                          const displayCenterY = centerY * scaleY;
+                          const displayRadius = radius * scaleX;
+                          
+                          return (
+                            <div
+                              key={index}
+                              style={{
+                                position: 'absolute',
+                                left: `${displayCenterX - displayRadius}px`,
+                                top: `${displayCenterY - displayRadius}px`,
+                                width: `${displayRadius * 2}px`,
+                                height: `${displayRadius * 2}px`,
+                                border: '2px solid blue',
+                                borderRadius: '50%',
+                                pointerEvents: 'none',
+                                zIndex: 1,
+                              }}
+                            />
+                          );
+                        }
+                        
+                        // 정확한 매칭인 경우 검색어 위치에만 동그라미 그리기
                         if (startIdx === -1) return null;
+                        
                         const totalLen = obj.text.length;
                         const searchLen = searchTerm.length;
                         const charWidth = (x2 - x1) / totalLen;
                         const wordX1 = x1 + charWidth * startIdx;
                         const wordX2 = wordX1 + charWidth * searchLen;
+                        
                         const centerX = (wordX1 + wordX2) / 2;
                         const centerY = (y1 + y2) / 2;
-                        const textWidth = (wordX2 - wordX1) * scaleX;
-                        const textHeight = (y2 - y1) * scaleY;
-                        const radius = Math.max(textWidth, textHeight) * 0.5;
+                        const wordWidth = wordX2 - wordX1;
+                        const wordHeight = y2 - y1;
+                        const radius = Math.max(wordWidth, wordHeight) * 0.15;
+                        
                         const displayCenterX = centerX * scaleX;
                         const displayCenterY = centerY * scaleY;
+                        const displayRadius = radius * scaleX;
+                        
                         return (
                           <div
                             key={index}
                             style={{
                               position: 'absolute',
-                              left: `${displayCenterX - radius}px`,
-                              top: `${displayCenterY - radius}px`,
-                              width: `${radius * 2}px`,
-                              height: `${radius * 2}px`,
-                              border: `2px solid red`,
+                              left: `${displayCenterX - displayRadius}px`,
+                              top: `${displayCenterY - displayRadius}px`,
+                              width: `${displayRadius * 2}px`,
+                              height: `${displayRadius * 2}px`,
+                              border: '2px solid red',
                               borderRadius: '50%',
                               pointerEvents: 'none',
                               zIndex: 1,
@@ -1434,40 +1486,86 @@ const App: React.FC = () => {
               .map((obj, index) => {
                 if (!modalImageRef.current) return null;
                 const imgElement = modalImageRef.current;
+                const rect = imgElement.getBoundingClientRect();
                 const bbox = obj.bbox;
+                
+                // bbox 좌표가 정규화되어 있는지 확인
                 const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
-                const scaleX = modalImageSize.width / imgElement.naturalWidth;
-                const scaleY = modalImageSize.height / imgElement.naturalHeight;
+                
+                // 이미지 크기에 맞게 좌표 변환
+                const scaleX = rect.width / imgElement.naturalWidth;
+                const scaleY = rect.height / imgElement.naturalHeight;
+                
+                // bbox 좌표를 실제 픽셀 좌표로 변환
                 const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
                 const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
                 const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
                 const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
+                
+                // 검색어와 일치하는 부분 찾기
                 const lowerText = obj.text.toLowerCase();
                 const lowerSearch = searchTerm.toLowerCase();
                 const startIdx = lowerText.indexOf(lowerSearch);
+                
+                // 의미적 매칭인 경우 전체 텍스트에 동그라미 그리기
+                if (obj.match_type === 'semantic') {
+                  const centerX = (x1 + x2) / 2;
+                  const centerY = (y1 + y2) / 2;
+                  const width = x2 - x1;
+                  const height = y2 - y1;
+                  const radius = Math.max(width, height) * 0.15;
+                  
+                  const displayCenterX = centerX * scaleX;
+                  const displayCenterY = centerY * scaleY;
+                  const displayRadius = radius * scaleX;
+                  
+                  return (
+                    <div
+                      key={index}
+                      style={{
+                        position: 'absolute',
+                        left: `${displayCenterX - displayRadius}px`,
+                        top: `${displayCenterY - displayRadius}px`,
+                        width: `${displayRadius * 2}px`,
+                        height: `${displayRadius * 2}px`,
+                        border: '2px solid blue',
+                        borderRadius: '50%',
+                        pointerEvents: 'none',
+                        zIndex: 1,
+                      }}
+                    />
+                  );
+                }
+                
+                // 정확한 매칭인 경우 검색어 위치에만 동그라미 그리기
                 if (startIdx === -1) return null;
+                
                 const totalLen = obj.text.length;
                 const searchLen = searchTerm.length;
                 const charWidth = (x2 - x1) / totalLen;
                 const wordX1 = x1 + charWidth * startIdx;
                 const wordX2 = wordX1 + charWidth * searchLen;
+                
                 const centerX = (wordX1 + wordX2) / 2;
                 const centerY = (y1 + y2) / 2;
-                const textWidth = (wordX2 - wordX1) * scaleX;
-                const textHeight = (y2 - y1) * scaleY;
-                const radius = Math.max(textWidth, textHeight) * 0.5;
+                const wordWidth = wordX2 - wordX1;
+                const wordHeight = y2 - y1;
+                const radius = Math.max(wordWidth, wordHeight) * 0.15;
+                
                 const displayCenterX = centerX * scaleX;
                 const displayCenterY = centerY * scaleY;
+                const displayRadius = radius * scaleX;
+                
                 return (
                   <div
                     key={index}
                     style={{
                       position: 'absolute',
-                      left: `${displayCenterX - radius}px`,
-                      top: `${displayCenterY - radius}px`,
-                      width: `${radius * 2}px`,
-                      height: `${radius * 2}px`,
-                      border: `2px solid red`,
+                      left: `${displayCenterX - displayRadius}px`,
+                      top: `${displayCenterY - displayRadius}px`,
+                      width: `${displayRadius * 2}px`,
+                      height: `${displayRadius * 2}px`,
+                      border: '2px solid red',
                       borderRadius: '50%',
                       pointerEvents: 'none',
                       zIndex: 1,

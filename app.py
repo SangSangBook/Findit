@@ -1270,9 +1270,14 @@ def analyze_image():
                     }
                     all_ocr_results.append(image_result)
                     
+                    # 이미지 타입 감지
+                    image_type = detect_image_type('\n'.join([block['text'] for block in text_blocks]))
+                    
                     # 세션에 이미지 정보 추가
                     ocr_results_cache[session_id]['images'].append({
                         'filename': file.filename,
+                        'file_url': f'/uploads/{file.filename}',
+                        'image_type': image_type,
                         'text_blocks': text_blocks
                     })
                     
@@ -1304,15 +1309,69 @@ def analyze_image():
             # 세션의 모든 텍스트 블록에서 검색
             all_session_blocks = []
             for image in ocr_results_cache[session_id]['images']:
-                all_session_blocks.extend(image['text_blocks'])
+                if 'text_blocks' in image:  # text_blocks 키 확인
+                    all_session_blocks.extend(image['text_blocks'])
             
+            # 정확한 일치 검색 (빨간색)
             for block in all_session_blocks:
                 if query.lower() in block['text'].lower():
+                    print(f"정확한 일치 발견: '{block['text']}'")
                     matches.append({
                         'text': block['text'],
                         'bbox': block['bbox'],
-                        'confidence': block.get('confidence', 1.0)
+                        'confidence': block.get('confidence', 1.0),
+                        'color': 'red',
+                        'match_type': 'exact'
                     })
+            
+            # 스마트 검색 모드인 경우 연관어 검색 (파란색)
+            if mode == 'smart':
+                # GPT를 사용하여 연관어 찾기
+                context = ocr_results_cache[session_id]['text']
+                prompt = f"""
+                다음은 OCR로 추출된 텍스트입니다:
+                {context}
+                
+                '{query}'와 관련된 단어들을 찾아주세요. 예를 들어:
+                - '음식'으로 검색했을 때: '닭갈비', '치킨', '한식', '요리' 등
+                - '사람'으로 검색했을 때: '학생', '교사', '직원' 등
+                
+                결과는 쉼표로 구분된 단어 목록으로 반환해주세요.
+                """
+                
+                try:
+                    response = client.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                            {"role": "system", "content": "당신은 전문적인 언어 분석가입니다. 주어진 텍스트에서 연관어를 찾아주세요."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        max_tokens=100
+                    )
+                    
+                    similar_terms = response.choices[0].message.content.strip().split(',')
+                    similar_terms = [term.strip() for term in similar_terms]
+                    similar_terms.append(query)  # 원래 검색어도 포함
+                    
+                    print(f"GPT가 찾은 연관어: {similar_terms}")
+                    
+                    # 연관어로 검색하여 파란색으로 표시
+                    for block in all_session_blocks:
+                        text = block['text'].lower()
+                        for term in similar_terms:
+                            if term.lower() in text and not any(m['text'] == block['text'] for m in matches):
+                                print(f"연관어 매칭 발견: '{block['text']}' (연관어: '{term}')")
+                                matches.append({
+                                    'text': block['text'],
+                                    'bbox': block['bbox'],
+                                    'confidence': block.get('confidence', 1.0),
+                                    'color': 'blue',
+                                    'match_type': 'semantic'
+                                })
+                                break
+                    
+                except Exception as e:
+                    print(f"GPT 연관어 검색 중 오류 발생: {str(e)}")
             
             print(f"매칭된 결과 수: {len(matches)}")
             
@@ -1325,7 +1384,8 @@ def analyze_image():
             return jsonify({
                 'matches': matches,
                 'smart_search': smart_search,
-                'session_id': session_id
+                'session_id': session_id,
+                'similar_terms': similar_terms if mode == 'smart' else []
             })
         else:
             # 검색어가 없는 경우 (태스크 제안 모드)
@@ -1351,6 +1411,48 @@ def analyze_image():
         import traceback
         print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
+
+def get_similar_terms(query: str) -> list:
+    """주어진 검색어와 관련된 유사어를 찾습니다."""
+    try:
+        similar_terms_map = {
+            '음식': ['닭갈비', '치킨', '한식', '요리', '식사', '음식점', '레스토랑', '맛집'],
+            '사람': ['학생', '교사', '직원', '고객', '손님', '관리자', '대표'],
+            '문서': ['계약서', '보고서', '논문', '서류', '자료', '문서'],
+            '제품': ['상품', '물건', '아이템', '제품명', '모델명', '브랜드'],
+            '커피': ['아메리카노', '라떼', '에스프레소', '카페', '카푸치노', '모카', '드립', '원두'],
+            '음료': ['물', '주스', '차', '탄산음료', '커피', '우유', '맥주', '소주'],
+            '과일': ['사과', '바나나', '오렌지', '포도', '딸기', '키위', '망고', '파인애플'],
+            '채소': ['상추', '양파', '당근', '오이', '토마토', '고추', '마늘', '파'],
+            '고기': ['소고기', '돼지고기', '닭고기', '양고기', '오리고기', '햄', '소시지', '베이컨'],
+            '해산물': ['생선', '새우', '오징어', '문어', '게', '조개', '굴', '전복']
+        }
+        
+        # 검색어를 소문자로 변환하여 매칭
+        query_lower = query.lower()
+        similar_terms = []
+        
+        # 정확한 매칭
+        if query_lower in similar_terms_map:
+            similar_terms.extend(similar_terms_map[query_lower])
+        
+        # 부분 매칭 (예: '커피'로 검색했을 때 '음료' 카테고리의 '커피'도 찾기)
+        for category, terms in similar_terms_map.items():
+            if query_lower in terms:
+                similar_terms.extend(terms)
+        
+        # 중복 제거
+        similar_terms = list(set(similar_terms))
+        
+        # 원래 검색어 추가
+        similar_terms.append(query)
+        
+        print(f"찾은 유사어 목록: {similar_terms}")
+        return similar_terms
+        
+    except Exception as e:
+        print(f"유사어 검색 중 오류 발생: {str(e)}")
+        return [query]
 
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
