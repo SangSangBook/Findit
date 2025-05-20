@@ -22,6 +22,10 @@ from google.oauth2 import service_account
 import googlemaps
 import yt_dlp
 import json
+import sys
+
+# src 디렉토리를 Python 경로에 추가
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 # Load environment variables from .env file
 load_dotenv()
@@ -368,9 +372,37 @@ def extract_text_with_vision(image_path):
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Image file not found: {image_path}")
 
-        # Vision API 클라이언트를 직접 사용하는 대신 HTTP 요청 사용
-        with open(image_path, 'rb') as image_file:
-            content = base64.b64encode(image_file.read()).decode('utf-8')
+        # 이미지 전처리
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError(f"Could not read image: {image_path}")
+
+        # 이미지 크기 조정 (너무 작거나 큰 경우)
+        height, width = image.shape[:2]
+        if width > 2000 or height > 2000:
+            scale = min(2000/width, 2000/height)
+            image = cv2.resize(image, None, fx=scale, fy=scale)
+
+        # 그레이스케일 변환
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # 노이즈 제거
+        denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
+        
+        # 대비 향상
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(denoised)
+        
+        # 이진화
+        _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # 모폴로지 연산으로 텍스트 선명도 향상
+        kernel = np.ones((1,1), np.uint8)
+        morph = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+        
+        # 이미지를 base64로 인코딩
+        _, img_encoded = cv2.imencode('.jpg', morph)
+        content = base64.b64encode(img_encoded).decode('utf-8')
         
         # API 요청 데이터 준비
         request_data = {
@@ -381,9 +413,20 @@ def extract_text_with_vision(image_path):
                     },
                     "features": [
                         {
-                            "type": "TEXT_DETECTION"
+                            "type": "TEXT_DETECTION",
+                            "maxResults": 50
+                        },
+                        {
+                            "type": "OBJECT_LOCALIZATION",
+                            "maxResults": 10
                         }
-                    ]
+                    ],
+                    "imageContext": {
+                        "languageHints": ["ko", "en"],
+                        "textDetectionParams": {
+                            "enableTextDetectionConfidenceScore": True
+                        }
+                    }
                 }
             ]
         }
@@ -391,7 +434,19 @@ def extract_text_with_vision(image_path):
         # API 호출 - vision_client 사용
         if vision_client:
             image = vision.Image(content=content)
-            response = vision_client.text_detection(image=image)
+            response = vision_client.annotate_image({
+                'image': image,
+                'features': [
+                    {'type_': vision.Feature.Type.TEXT_DETECTION, 'max_results': 50},
+                    {'type_': vision.Feature.Type.OBJECT_LOCALIZATION, 'max_results': 10}
+                ],
+                'image_context': {
+                    'language_hints': ['ko', 'en'],
+                    'text_detection_params': {
+                        'enable_text_detection_confidence_score': True
+                    }
+                }
+            })
             result = response.to_dict()
         else:
             # vision_client가 없는 경우 HTTP 요청 사용
@@ -403,86 +458,131 @@ def extract_text_with_vision(image_path):
             response = requests.post(vision_api_url, json=request_data)
             response.raise_for_status()
             result = response.json()
-        
-        if 'responses' not in result or not result['responses'] or 'textAnnotations' not in result['responses'][0]:
-            return []
-        
-        texts = result['responses'][0]['textAnnotations']
-        
-        # 전체 텍스트와 좌표 정보 저장
-        text_blocks = []
-        img = Image.open(image_path)
-        width, height = img.size
-        
-        # 첫 번째 텍스트는 전체 텍스트이므로 건너뜀
-        for text in texts[1:]:
-            vertices = text['boundingPoly']['vertices']
-            x_coords = [vertex.get('x', 0) for vertex in vertices]
-            y_coords = [vertex.get('y', 0) for vertex in vertices]
-            
-            x1 = min(x_coords)
-            y1 = min(y_coords)
-            x2 = max(x_coords)
-            y2 = max(y_coords)
-            
-            normalized_bbox = {
-                'x1': x1 / width,
-                'y1': y1 / height,
-                'x2': x2 / width,
-                'y2': y2 / height
-            }
-            
-            text_blocks.append({
-                'text': text['description'],
-                'bbox': normalized_bbox,
-                'abs_x1': x1,
-                'abs_x2': x2,
-                'abs_y1': y1,
-                'abs_y2': y2
-            })
 
-        # y좌표로 정렬해서 같은 줄에 있는 단어들을 모음
-        # 매우 가까운 y좌표는 동일한 줄로 간주
-        y_threshold = 0.02  # 이미지 높이의 2%
+        # 텍스트 검출 결과 처리
+        text_blocks = []
+        detected_objects = []
         
-        # y좌표 기준으로 먼저 그룹화
-        y_groups = {}
-        for block in text_blocks:
-            y_val = round(block['bbox']['y1'] / y_threshold) * y_threshold
-            if y_val not in y_groups:
-                y_groups[y_val] = []
-            y_groups[y_val].append(block)
+        if 'responses' in result and result['responses']:
+            response = result['responses'][0]
+            
+            # 텍스트 검출 결과 처리
+            if 'textAnnotations' in response:
+                texts = response['textAnnotations']
+                img = Image.open(image_path)
+                width, height = img.size
+                
+                # 첫 번째 텍스트는 전체 텍스트이므로 건너뜀
+                current_line = []
+                current_y = None
+                y_threshold = height * 0.05  # 같은 줄로 간주할 y좌표 차이 임계값
+                
+                for text in texts[1:]:
+                    vertices = text['boundingPoly']['vertices']
+                    x_coords = [vertex.get('x', 0) for vertex in vertices]
+                    y_coords = [vertex.get('y', 0) for vertex in vertices]
+                    
+                    x1 = min(x_coords)
+                    y1 = min(y_coords)
+                    x2 = max(x_coords)
+                    y2 = max(y_coords)
+                    
+                    # 현재 텍스트의 중심 y좌표
+                    current_y_center = (y1 + y2) / 2
+                    
+                    # 새로운 줄인지 확인
+                    if current_y is None:
+                        current_y = current_y_center
+                        current_line.append(text)
+                    elif abs(current_y_center - current_y) <= y_threshold:
+                        # 같은 줄에 있는 텍스트
+                        current_line.append(text)
+                    else:
+                        # 새로운 줄 시작
+                        if current_line:
+                            # 현재 줄의 텍스트들을 x좌표로 정렬하여 결합
+                            current_line.sort(key=lambda t: min([v.get('x', 0) for v in t['boundingPoly']['vertices']]))
+                            combined_text = ' '.join([t['description'] for t in current_line])
+                            
+                            # 첫 번째 텍스트의 bbox를 사용
+                            first_text = current_line[0]
+                            vertices = first_text['boundingPoly']['vertices']
+                            x_coords = [vertex.get('x', 0) for vertex in vertices]
+                            y_coords = [vertex.get('y', 0) for vertex in vertices]
+                            
+                            normalized_bbox = {
+                                'x1': min(x_coords) / width,
+                                'y1': min(y_coords) / height,
+                                'x2': max(x_coords) / width,
+                                'y2': max(y_coords) / height
+                            }
+                            
+                            text_blocks.append({
+                                'text': combined_text,
+                                'bbox': normalized_bbox,
+                                'confidence': text.get('confidence', 1.0)
+                            })
+                        
+                        # 새로운 줄 시작
+                        current_line = [text]
+                        current_y = current_y_center
+                
+                # 마지막 줄 처리
+                if current_line:
+                    current_line.sort(key=lambda t: min([v.get('x', 0) for v in t['boundingPoly']['vertices']]))
+                    combined_text = ' '.join([t['description'] for t in current_line])
+                    
+                    first_text = current_line[0]
+                    vertices = first_text['boundingPoly']['vertices']
+                    x_coords = [vertex.get('x', 0) for vertex in vertices]
+                    y_coords = [vertex.get('y', 0) for vertex in vertices]
+                    
+                    normalized_bbox = {
+                        'x1': min(x_coords) / width,
+                        'y1': min(y_coords) / height,
+                        'x2': max(x_coords) / width,
+                        'y2': max(y_coords) / height
+                    }
+                    
+                    text_blocks.append({
+                        'text': combined_text,
+                        'bbox': normalized_bbox,
+                        'confidence': text.get('confidence', 1.0)
+                    })
+            
+            # 객체 검출 결과 처리
+            if 'localizedObjectAnnotations' in response:
+                objects = response['localizedObjectAnnotations']
+                img = Image.open(image_path)
+                width, height = img.size
+                
+                for obj in objects:
+                    vertices = obj['boundingPoly']['normalizedVertices']
+                    x_coords = [vertex.get('x', 0) for vertex in vertices]
+                    y_coords = [vertex.get('y', 0) for vertex in vertices]
+                    
+                    x1 = min(x_coords)
+                    y1 = min(y_coords)
+                    x2 = max(x_coords)
+                    y2 = max(y_coords)
+                    
+                    detected_objects.append({
+                        'text': obj['name'],
+                        'bbox': {
+                            'x1': x1,
+                            'y1': y1,
+                            'x2': x2,
+                            'y2': y2
+                        },
+                        'confidence': obj['score'],
+                        'match_type': 'object'
+                    })
+                    print(f"감지된 객체: {obj['name']} (신뢰도: {obj['score']:.2f})")
         
-        # 각 y_group 내에서 x좌표 순서대로 정렬
-        combined_blocks = []
-        for y_val, blocks in sorted(y_groups.items()):
-            # x좌표 기준 정렬
-            blocks.sort(key=lambda b: b['bbox']['x1'])
-            
-            # 모든 텍스트를 정규화된 띄어쓰기로 결합
-            # 각 단어 사이의 실제 간격과 상관없이 한 칸 띄우기
-            line_text = " ".join([b['text'] for b in blocks])
-            
-            # 단어들의 전체 bounding box 계산
-            min_x1 = min(b['bbox']['x1'] for b in blocks)
-            min_y1 = min(b['bbox']['y1'] for b in blocks)
-            max_x2 = max(b['bbox']['x2'] for b in blocks)
-            max_y2 = max(b['bbox']['y2'] for b in blocks)
-            
-            combined_blocks.append({
-                'text': line_text,
-                'bbox': {
-                    'x1': min_x1,
-                    'y1': min_y1,
-                    'x2': max_x2,
-                    'y2': max_y2
-                }
-            })
-        
-        return combined_blocks
+        return text_blocks, detected_objects
     except Exception as e:
         print(f"Error in extract_text_with_vision: {str(e)}")
-        return []
+        return [], []
 
 def combine_vertical_texts(coordinates):
     """세로로 정렬된 텍스트들을 하나의 텍스트로 결합"""
@@ -621,7 +721,8 @@ def extract_frames_from_video(video_path, interval=2.0, max_frames=None):
             break
             
         if frame_count % frame_interval == 0:
-            timestamp = frame_count / fps
+            # 타임스탬프를 정수 초로 계산
+            timestamp = int(frame_count / fps)
             frames.append(frame)
             timestamps.append(timestamp)
             
@@ -642,11 +743,11 @@ def process_video(video_path, query, mode='normal'):
     cap = cv2.VideoCapture(video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
-    duration = total_frames / fps
+    duration = int(total_frames / fps)  # 정수로 변환
     cap.release()
     
     # 비디오 길이에 따라 최대 프레임 수 조정
-    max_frames = min(50, int(duration))  # 최대 50프레임 또는 1초당 1프레임
+    max_frames = min(50, duration)  # 최대 50프레임 또는 1초당 1프레임
     frames, timestamps = extract_frames_from_video(video_path, interval=2.0, max_frames=max_frames)
     
     timeline_results = []
@@ -695,7 +796,7 @@ def process_video(video_path, query, mode='normal'):
             
             try:
                 # OCR 실행 (수정된 함수 사용)
-                text_blocks = extract_text_with_vision(temp_frame_path)
+                text_blocks, detected_objects = extract_text_with_vision(temp_frame_path)
                 
                 if text_blocks:
                     # 현재 프레임의 OCR 텍스트 저장
@@ -828,6 +929,14 @@ def upload_image():
         if not session_id:
             session_id = str(int(time.time()))
         
+        # 세션 초기화
+        if session_id not in ocr_results_cache:
+            ocr_results_cache[session_id] = {
+                'text': '',
+                'coordinates': {},
+                'images': []
+            }
+        
         for file in files:
             if file.filename == '':
                 continue
@@ -840,26 +949,29 @@ def upload_image():
             file.save(filepath)
             
             try:
-                # OCR로 텍스트 추출
-                text_blocks = extract_text_with_vision(filepath)
+                # OCR 및 객체 인식 실행
+                text_blocks, detected_objects = extract_text_with_vision(filepath)
                 
-                if text_blocks:
+                if text_blocks or detected_objects:
                     # 텍스트 블록에서 전체 텍스트와 좌표 정보 추출
                     ocr_text = '\n'.join([block['text'] for block in text_blocks])
-                    coordinates = {block['text']: {'bbox': block['bbox'], 'confidence': 1.0} for block in text_blocks}
+                    
+                    # 텍스트 블록 좌표 정보 저장
+                    coordinates = {block['text']: {'bbox': block['bbox'], 'confidence': block['confidence']} for block in text_blocks}
+                    
+                    # 객체 인식 결과도 좌표 정보에 추가
+                    for obj in detected_objects:
+                        coordinates[obj['text']] = {
+                            'bbox': obj['bbox'],
+                            'confidence': obj['confidence'],
+                            'match_type': 'object'  # 객체 인식 결과임을 표시
+                        }
                     
                     # 이미지 타입 감지
                     image_type = detect_image_type(ocr_text)
                     print(f"감지된 이미지 타입: {image_type}")
                     
                     # 각 이미지의 OCR 결과를 저장
-                    if session_id not in ocr_results_cache:
-                        ocr_results_cache[session_id] = {
-                            'text': '',
-                            'coordinates': {},
-                            'images': []
-                        }
-                    
                     ocr_results_cache[session_id]['text'] += f"\n--- 이미지 {len(uploaded_files) + 1} ---\n{ocr_text}"
                     ocr_results_cache[session_id]['coordinates'].update(coordinates)
                     
@@ -870,14 +982,18 @@ def upload_image():
                 uploaded_files.append({
                     'filename': filename,
                     'file_url': f'/uploads/{filename}',
-                    'image_type': image_type if text_blocks else 'OTHER'
+                    'image_type': image_type if text_blocks or detected_objects else 'OTHER',
+                    'text_blocks': text_blocks,
+                    'detected_objects': detected_objects
                 })
                 
                 # 세션에 이미지 정보 추가
                 ocr_results_cache[session_id]['images'].append({
                     'filename': filename,
                     'file_url': f'/uploads/{filename}',
-                    'image_type': image_type if text_blocks else 'OTHER'
+                    'image_type': image_type if text_blocks or detected_objects else 'OTHER',
+                    'text_blocks': text_blocks,
+                    'detected_objects': detected_objects
                 })
                 
             finally:
@@ -902,6 +1018,8 @@ def upload_image():
         
     except Exception as e:
         print(f"이미지 업로드 중 오류 발생: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 def detect_image_type(text):
@@ -1108,25 +1226,33 @@ def get_smart_search_predictions(query: str, context: str) -> dict:
             ]
         }
 
-def get_task_suggestions(text: str) -> list:
-    """OCR 텍스트를 기반으로 태스크 제안을 생성합니다."""
+def get_task_suggestions(text: str, detected_objects: list = None) -> list:
+    """OCR 텍스트와 감지된 객체를 기반으로 태스크 제안을 생성합니다."""
     try:
         # 텍스트가 너무 길 경우 잘라내기
         max_text_length = 4000  # GPT-4의 컨텍스트 제한을 고려
         if len(text) > max_text_length:
             text = text[:max_text_length] + "..."
         
+        # 감지된 객체 정보 추가
+        objects_info = ""
+        if detected_objects:
+            objects_info = "\n감지된 객체:\n" + "\n".join([
+                f"- {obj['text']} (신뢰도: {obj.get('confidence', 1.0):.2f})"
+                for obj in detected_objects
+            ])
+            print(f"감지된 객체 정보: {objects_info}")  # 디버깅용
+        
         prompt = f"""
-        다음은 OCR로 추출된 텍스트입니다. 각 이미지의 텍스트는 '=== 이미지 N ===' 형식으로 구분되어 있습니다:
+        다음은 OCR로 추출된 텍스트와 감지된 객체 정보입니다:
+        
+        OCR 텍스트:
         {text}
         
-        이 텍스트들을 바탕으로 수행해야 할 태스크들을 제안해주세요.
-        각 태스크는 다음 형식으로 작성해주세요:
-        - task: 태스크 제목
-        - description: 태스크 설명
-        - priority: 'high', 'medium', 'low' 중 하나
+        {objects_info}
         
-        JSON 형식으로 응답해주세요:
+        이 정보들을 바탕으로 수행해야 할 태스크들을 한국어로 제안해주세요.
+        반드시 다음 JSON 형식으로만 응답해주세요:
         {{
             "suggestions": [
                 {{
@@ -1138,15 +1264,21 @@ def get_task_suggestions(text: str) -> list:
         }}
         
         주의사항:
-        1. 각 이미지의 텍스트를 개별적으로 분석하고, 연관된 태스크를 제안하세요.
-        2. 이미지 간의 연관성이 없더라도 각각의 태스크를 제안하세요.
-        3. 반드시 유효한 JSON 형식을 지켜주세요.
+        1. 반드시 위의 JSON 형식으로만 응답해주세요.
+        2. 감지된 객체가 있다면, 반드시 그 객체와 관련된 구체적인 태스크를 제안하세요.
+           예시:
+           - 사과가 감지된 경우: "사과의 품질 검사", "사과의 신선도 확인", "사과의 가격 책정" 등
+           - 자동차가 감지된 경우: "자동차 모델 식별", "자동차 상태 점검", "자동차 가격 조사" 등
+        3. 각 태스크는 구체적이고 실행 가능한 형태로 제안해주세요.
+        4. 일반적인 "객체 분석" 같은 모호한 태스크는 피해주세요.
+        5. 태스크 제목과 설명은 반드시 한국어로 작성해주세요.
+        6. 감지된 객체가 있다면, 그 객체에 대한 구체적인 분석 태스크를 우선적으로 제안하세요.
         """
         
         response = client.chat.completions.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant that suggests tasks based on OCR text. Always respond in valid JSON format."},
+                {"role": "system", "content": "당신은 한국어로 구체적이고 실행 가능한 태스크를 제안하는 전문가입니다. 감지된 객체가 있다면 반드시 그 객체와 관련된 구체적인 태스크를 제안해야 합니다. 반드시 지정된 JSON 형식으로만 응답해야 합니다."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
@@ -1160,23 +1292,84 @@ def get_task_suggestions(text: str) -> list:
             result = json.loads(response_text)
             suggestions = result.get('suggestions', [])
             print(f"태스크 제안 결과: {suggestions}")
+            
+            # 감지된 객체가 있는데 일반적인 태스크만 제안된 경우
+            if detected_objects and not any(obj['text'].lower() in suggestion['task'].lower() or 
+                                          obj['text'].lower() in suggestion['description'].lower() 
+                                          for obj in detected_objects for suggestion in suggestions):
+                # 객체별 구체적인 태스크 생성
+                specific_suggestions = []
+                for obj in detected_objects:
+                    obj_name = obj['text']
+                    specific_suggestions.extend([
+                        {
+                            "task": f"{obj_name} 품질 검사",
+                            "description": f"{obj_name}의 상태와 품질을 자세히 검사하세요.",
+                            "priority": "high"
+                        },
+                        {
+                            "task": f"{obj_name} 특성 분석",
+                            "description": f"{obj_name}의 특징과 특성을 분석하세요.",
+                            "priority": "medium"
+                        }
+                    ])
+                return specific_suggestions
+            
             return suggestions
         except json.JSONDecodeError as e:
             print(f"JSON 파싱 오류: {e}")
             print(f"원본 응답: {response_text}")
-            # 기본 태스크 제안 반환
+            # 감지된 객체가 있는 경우 객체별 구체적인 태스크 생성
+            if detected_objects:
+                specific_suggestions = []
+                for obj in detected_objects:
+                    obj_name = obj['text']
+                    specific_suggestions.extend([
+                        {
+                            "task": f"{obj_name} 품질 검사",
+                            "description": f"{obj_name}의 상태와 품질을 자세히 검사하세요.",
+                            "priority": "high"
+                        },
+                        {
+                            "task": f"{obj_name} 특성 분석",
+                            "description": f"{obj_name}의 특징과 특성을 분석하세요.",
+                            "priority": "medium"
+                        }
+                    ])
+                return specific_suggestions
+            
+            # 기본 태스크 제안 반환 (한국어)
             return [{
-                "task": "텍스트 분석",
-                "description": "OCR로 추출된 텍스트를 분석하여 필요한 작업을 파악하세요.",
+                "task": "객체 분석",
+                "description": "감지된 객체의 특성과 상태를 자세히 분석하세요.",
                 "priority": "high"
             }]
             
     except Exception as e:
         print(f"Error in task suggestion: {e}")
-        # 오류 발생 시 기본 태스크 제안 반환
+        # 감지된 객체가 있는 경우 객체별 구체적인 태스크 생성
+        if detected_objects:
+            specific_suggestions = []
+            for obj in detected_objects:
+                obj_name = obj['text']
+                specific_suggestions.extend([
+                    {
+                        "task": f"{obj_name} 품질 검사",
+                        "description": f"{obj_name}의 상태와 품질을 자세히 검사하세요.",
+                        "priority": "high"
+                    },
+                    {
+                        "task": f"{obj_name} 특성 분석",
+                        "description": f"{obj_name}의 특징과 특성을 분석하세요.",
+                        "priority": "medium"
+                    }
+                ])
+            return specific_suggestions
+        
+        # 오류 발생 시 기본 태스크 제안 반환 (한국어)
         return [{
-            "task": "텍스트 분석",
-            "description": "OCR로 추출된 텍스트를 분석하여 필요한 작업을 파악하세요.",
+            "task": "객체 분석",
+            "description": "감지된 객체의 특성과 상태를 자세히 분석하세요.",
             "priority": "high"
         }]
 
@@ -1202,11 +1395,22 @@ def analyze_image():
                 if session_id and session_id in ocr_results_cache:
                     previous_text = ocr_results_cache[session_id].get('text', '')
                     combined_text = f"{previous_text}\n=== 새 이미지 ===\n{text}" if previous_text else text
+                    
+                    # 감지된 객체 정보 가져오기
+                    detected_objects = []
+                    coordinates = ocr_results_cache[session_id].get('coordinates', {})
+                    for text, data in coordinates.items():
+                        if data.get('match_type') == 'object':
+                            detected_objects.append({
+                                'name': text,
+                                'confidence': data.get('confidence', 1.0)
+                            })
                 else:
                     combined_text = text
+                    detected_objects = []
                 
-                # 새로운 태스크 제안 생성
-                new_suggestions = get_task_suggestions(combined_text)
+                # 새로운 태스크 제안 생성 (감지된 객체 정보 포함)
+                new_suggestions = get_task_suggestions(combined_text, detected_objects)
                 
                 # 세션에 태스크 제안 저장
                 if session_id not in ocr_results_cache:
@@ -1234,178 +1438,78 @@ def analyze_image():
         print(f"검색어: {query}")
         print(f"모드: {mode}")
         print(f"파일 수: {len(files)}")
-        
-        if not files:
-            return jsonify({'error': '이미지 파일이 필요합니다'}), 400
-            
-        # 세션 초기화 또는 가져오기
+
+        if not session_id:
+            return jsonify({'error': '세션 ID가 필요합니다'}), 400
+
         if session_id not in ocr_results_cache:
-            ocr_results_cache[session_id] = {
-                'text': '',
-                'coordinates': {},
-                'images': [],
-                'task_suggestions': []
-            }
+            return jsonify({'error': '유효하지 않은 세션 ID입니다'}), 400
+
+        # OCR 결과와 감지된 객체 가져오기
+        ocr_text = ocr_results_cache[session_id].get('text', '')
+        coordinates = ocr_results_cache[session_id].get('coordinates', {})
         
-        # OCR 처리
-        all_ocr_results = []
-        all_text_blocks = []
-        
-        for file in files:
-            try:
-                print(f"\n이미지 처리 시작: {file.filename}")
-                temp_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_image.jpg')
-                file.save(temp_path)
-                
-                # OCR 실행
-                text_blocks = extract_text_with_vision(temp_path)
-                print(f"OCR 결과: {len(text_blocks)}개의 텍스트 블록 발견")
-                
-                if text_blocks:
-                    all_text_blocks.extend(text_blocks)
-                    # 각 이미지의 OCR 결과를 개별적으로 저장
-                    image_result = {
-                        'filename': file.filename,
-                        'text_blocks': text_blocks
-                    }
-                    all_ocr_results.append(image_result)
-                    
-                    # 이미지 타입 감지
-                    image_type = detect_image_type('\n'.join([block['text'] for block in text_blocks]))
-                    
-                    # 세션에 이미지 정보 추가
-                    ocr_results_cache[session_id]['images'].append({
-                        'filename': file.filename,
-                        'file_url': f'/uploads/{file.filename}',
-                        'image_type': image_type,
-                        'text_blocks': text_blocks
-                    })
-                    
-                    # 세션의 전체 텍스트 업데이트
-                    new_text = "\n".join([block['text'] for block in text_blocks])
-                    if ocr_results_cache[session_id]['text']:
-                        ocr_results_cache[session_id]['text'] += f"\n=== 새 이미지 ===\n{new_text}"
-                    else:
-                        ocr_results_cache[session_id]['text'] = new_text
-                
-                print(f"이미지 처리 완료: {file.filename}")
-                
-            except Exception as e:
-                print(f"이미지 처리 중 오류 발생: {str(e)}")
-                import traceback
-                print(traceback.format_exc())
-                continue
-            finally:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-        
-        print(f"\n총 처리된 이미지 수: {len(all_ocr_results)}")
-        print(f"총 텍스트 블록 수: {len(all_text_blocks)}")
-        
-        # 검색어가 있는 경우 매칭 처리
+        print(f"OCR 텍스트: {ocr_text}")
+        print(f"좌표 정보: {coordinates}")
+
+        # 검색 결과 초기화
         matches = []
+        all_detected_objects = []
+
+        # 텍스트 검색
         if query:
-            print(f"\n검색어 '{query}'로 매칭 시작")
-            # 세션의 모든 텍스트 블록에서 검색
-            all_session_blocks = []
-            for image in ocr_results_cache[session_id]['images']:
-                if 'text_blocks' in image:  # text_blocks 키 확인
-                    all_session_blocks.extend(image['text_blocks'])
+            query_lower = query.lower()
+            is_korean_query = any('\uAC00' <= char <= '\uD7A3' for char in query)
             
-            # 정확한 일치 검색 (빨간색)
-            for block in all_session_blocks:
-                if query.lower() in block['text'].lower():
-                    print(f"정확한 일치 발견: '{block['text']}'")
-                    matches.append({
-                        'text': block['text'],
-                        'bbox': block['bbox'],
-                        'confidence': block.get('confidence', 1.0),
-                        'color': 'red',
-                        'match_type': 'exact'
-                    })
+            # 한글 검색어인 경우 영어 매핑 가져오기
+            korean_matches = []
+            if is_korean_query:
+                from src.utils.languageMapping import koreanToEnglish
+                korean_matches = koreanToEnglish.get(query_lower, [])
+                print(f"한글 검색어 '{query}'의 영어 매핑: {korean_matches}")
             
-            # 스마트 검색 모드인 경우 연관어 검색 (파란색)
-            if mode == 'smart':
-                # GPT를 사용하여 연관어 찾기
-                context = ocr_results_cache[session_id]['text']
-                prompt = f"""
-                다음은 OCR로 추출된 텍스트입니다:
-                {context}
+            for text, data in coordinates.items():
+                text_lower = text.lower()
                 
-                '{query}'와 관련된 단어들을 찾아주세요. 예를 들어:
-                - '음식'으로 검색했을 때: '닭갈비', '치킨', '한식', '요리' 등
-                - '사람'으로 검색했을 때: '학생', '교사', '직원' 등
+                # 직접 매칭 확인
+                direct_match = query_lower in text_lower
                 
-                결과는 쉼표로 구분된 단어 목록으로 반환해주세요.
-                """
+                # 한글-영어 매핑 확인
+                mapped_match = False
+                if is_korean_query:
+                    mapped_match = any(english.lower() in text_lower for english in korean_matches)
                 
-                try:
-                    response = client.chat.completions.create(
-                        model="gpt-3.5-turbo",
-                        messages=[
-                            {"role": "system", "content": "당신은 전문적인 언어 분석가입니다. 주어진 텍스트에서 연관어를 찾아주세요."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        max_tokens=100
-                    )
-                    
-                    similar_terms = response.choices[0].message.content.strip().split(',')
-                    similar_terms = [term.strip() for term in similar_terms]
-                    similar_terms.append(query)  # 원래 검색어도 포함
-                    
-                    print(f"GPT가 찾은 연관어: {similar_terms}")
-                    
-                    # 연관어로 검색하여 파란색으로 표시
-                    for block in all_session_blocks:
-                        text = block['text'].lower()
-                        for term in similar_terms:
-                            if term.lower() in text and not any(m['text'] == block['text'] for m in matches):
-                                print(f"연관어 매칭 발견: '{block['text']}' (연관어: '{term}')")
-                                matches.append({
-                                    'text': block['text'],
-                                    'bbox': block['bbox'],
-                                    'confidence': block.get('confidence', 1.0),
-                                    'color': 'blue',
-                                    'match_type': 'semantic'
-                                })
-                                break
-                    
-                except Exception as e:
-                    print(f"GPT 연관어 검색 중 오류 발생: {str(e)}")
-            
-            print(f"매칭된 결과 수: {len(matches)}")
-            
-            # 스마트 검색 모드인 경우 GPT 예측 추가
-            smart_search = None
-            if mode == 'smart':
-                context = ocr_results_cache[session_id]['text']
-                smart_search = get_smart_search_predictions(query, context)
-            
-            return jsonify({
-                'matches': matches,
-                'smart_search': smart_search,
-                'session_id': session_id,
-                'similar_terms': similar_terms if mode == 'smart' else []
-            })
-        else:
-            # 검색어가 없는 경우 (태스크 제안 모드)
-            print("\n태스크 제안 모드")
-            # 세션의 전체 텍스트 사용하여 새로운 태스크 제안 생성
-            combined_text = ocr_results_cache[session_id]['text']
-            new_suggestions = get_task_suggestions(combined_text)
-            
-            # 세션의 태스크 제안 업데이트
-            ocr_results_cache[session_id]['task_suggestions'] = new_suggestions
-            
-            print(f"생성된 태스크 제안 수: {len(new_suggestions)}")
-            
-            return jsonify({
-                'suggestions': new_suggestions,
-                'session_id': session_id,
-                'ocr_results': all_ocr_results,
-                'total_images': len(ocr_results_cache[session_id]['images'])
-            })
-        
+                if direct_match or mapped_match:
+                    # 객체 인식 결과인 경우 (녹색 네모)
+                    if data.get('match_type') == 'object':
+                        all_detected_objects.append({
+                            'name': text,
+                            'bbox': data['bbox'],
+                            'confidence': data.get('confidence', 1.0),
+                            'match_type': 'object'
+                        })
+                    # 텍스트 검색 결과인 경우 (빨간 동그라미)
+                    else:
+                        matches.append({
+                            'text': text,
+                            'bbox': data['bbox'],
+                            'confidence': data.get('confidence', 1.0),
+                            'match_type': 'text'
+                        })
+
+        print(f"매칭된 결과 수: {len(matches)}")
+        print(f"감지된 객체 수: {len(all_detected_objects)}")
+
+        response_data = {
+            'matches': matches,
+            'detected_objects': all_detected_objects,
+            'ocr_text': ocr_text,
+            'total_matches': len(matches),
+            'total_objects': len(all_detected_objects)
+        }
+
+        return jsonify(response_data)
+
     except Exception as e:
         print(f"Error in analyze_image: {str(e)}")
         import traceback
@@ -1462,13 +1566,50 @@ def uploaded_file(filename):
 def chat():
     data = request.get_json()
     user_message = data.get('message', '')
+    session_id = data.get('session_id', '')
+    current_image_index = data.get('current_image_index', 0)  # 현재 이미지 인덱스 추가
     
     try:
+        # 세션에서 객체 인식 결과 가져오기
+        detected_objects = []
+        if session_id and session_id in ocr_results_cache:
+            # 현재 이미지의 객체 인식 결과만 가져오기
+            images = ocr_results_cache[session_id].get('images', [])
+            if 0 <= current_image_index < len(images):
+                current_image = images[current_image_index]
+                detected_objects = current_image.get('detected_objects', [])
+                print(f"현재 이미지({current_image_index})의 감지된 객체: {detected_objects}")
+
+        # 객체 정보를 포함한 프롬프트 생성
+        objects_info = ""
+        if detected_objects:
+            objects_info = "\n감지된 객체:\n" + "\n".join([f"- {obj['text']} (신뢰도: {obj['confidence']:.2f})" for obj in detected_objects])
+
         # 전역 client 객체 사용
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "당신은 FindIt Assistant입니다. 사용자의 질문에 친절하게 답변하고, 간판이나 장소에 대한 질문이 있으면 위치 정보를 제공해주세요."},
+                {"role": "system", "content": f"""당신은 FindIt Assistant입니다. 이미지에서 감지된 객체 정보를 바탕으로 사용자의 질문에 답변해주세요.
+
+{objects_info}
+
+답변 형식:
+1. 감지된 객체가 있다면, 반드시 다음 형식으로 시작하세요:
+   "이미지에서 [객체명]이(가) 감지되었습니다. 신뢰도가 [신뢰도]%로 [높음/중간/낮음]습니다."
+
+2. 그 다음에 객체에 대한 설명을 추가하세요:
+   "이는 [객체의 특징]입니다. [객체의 설명]"
+
+3. 마지막으로 사용자의 질문에 대한 답변을 제공하세요.
+
+예시 답변:
+"이미지에서 사과(Apple)가 감지되었습니다. 신뢰도가 89.7%로 매우 높습니다. 이는 빨간색 사과로 보입니다. 사과는 과일의 일종으로, 달콤하고 신맛이 나는 특징이 있습니다."
+
+주의사항:
+- 반드시 감지된 객체 정보를 포함하여 답변해주세요.
+- 객체가 감지되지 않았다면, 그 사실을 먼저 언급해주세요.
+- 사용자의 질문에 직접적으로 답변해주세요.
+- 신뢰도가 80% 이상이면 "매우 높음", 50% 이상이면 "중간", 그 미만이면 "낮음"으로 표현해주세요."""},
                 {"role": "user", "content": user_message}
             ]
         )
@@ -1486,21 +1627,24 @@ def chat():
                     return jsonify({
                         'type': 'map',
                         'content': f"{place['name']}의 위치를 찾았습니다.",
-                        'location': location
+                        'location': location,
+                        'detected_objects': detected_objects
                     })
             except Exception as e:
                 print(f"Error searching location: {e}")
         
         return jsonify({
             'type': 'text',
-            'content': bot_response
+            'content': bot_response,
+            'detected_objects': detected_objects
         })
         
     except Exception as e:
         print(f"Error in chat endpoint: {e}")
         return jsonify({
             'type': 'text',
-            'content': '죄송합니다. 오류가 발생했습니다. 다시 시도해주세요.'
+            'content': '죄송합니다. 오류가 발생했습니다. 다시 시도해주세요.',
+            'detected_objects': []
         }), 500
 
 def is_valid_youtube_url(url):
@@ -1588,6 +1732,7 @@ def process_youtube():
         query = data.get('query', '')
         mode = data.get('mode', 'normal')
         video_id = data.get('video_id', '')
+        session_id = data.get('session_id', '')  # 세션 ID 가져오기
         
         if not url:
             return jsonify({'error': 'URL이 필요합니다'}), 400
@@ -1597,6 +1742,7 @@ def process_youtube():
         print(f"Video ID: {video_id}")
         print(f"검색어: {query}")
         print(f"모드: {mode}")
+        print(f"세션 ID: {session_id}")
         
         try:
             # YouTube 영상 다운로드
@@ -1605,15 +1751,16 @@ def process_youtube():
             
             try:
                 print("비디오 처리 시작")
-                # 비디오 처리
-                timeline_results = process_video(video_info['filepath'], query, mode)
+                # 비디오 처리 (세션 ID 전달)
+                timeline_results = process_video(video_info['filepath'], query, mode, session_id)
                 print(f"처리된 타임라인 결과: {len(timeline_results)}개 항목")
                 
                 # OCR 텍스트 가져오기
                 ocr_text = '\n'.join([f"=== {item['timestamp']}초 ===\n" + '\n'.join([text['text'] for text in item['texts']]) for item in timeline_results])
                 
-                # 세션 ID 생성
-                session_id = str(int(time.time()))
+                # 세션 ID가 없는 경우 새로 생성
+                if not session_id:
+                    session_id = str(int(time.time()))
                 
                 # 세션에 비디오 정보 저장
                 if session_id not in ocr_results_cache:
@@ -1664,10 +1811,7 @@ def process_youtube():
         return jsonify({'error': f'처리 중 오류가 발생했습니다: {str(e)}'}), 500
 
 def getInfoFromTextWithOpenAI(text: str) -> str | None:
-    """OpenAI API를 사용하여 주어진 텍스트를 요약합니다.
-    @param text 요약할 텍스트입니다.
-    @returns 요약된 텍스트 또는 오류 메시지를 반환하는 Promise 객체입니다.
-    """
+    """OpenAI API를 사용하여 주어진 텍스트를 요약합니다."""
     if not text.strip():
         return '정보를 추출할 텍스트가 제공되지 않았습니다.'
     try:
@@ -1677,59 +1821,30 @@ def getInfoFromTextWithOpenAI(text: str) -> str | None:
             messages=[
                 { 
                     'role': 'system', 
-                    'content': '''당신은 이미지 분석 및 Q&A 어시스턴트입니다. 모든 응답은 마크다운 형식으로 작성하며, 간결하고 명확하게 정보를 전달하세요.
+                    'content': '''당신은 이미지 분석 및 Q&A 어시스턴트입니다. 이미지에서 감지된 객체 정보를 바탕으로 사용자의 질문에 답변해주세요.
 
-응답 형식:
-1. **주요 정보 요약** (2-3문장)
-2. **핵심 분석** (불릿 포인트로 간단히)
-3. **추가 정보** (필요한 경우에만)
+답변 형식:
+1. 감지된 객체가 있다면, 반드시 다음 형식으로 시작하세요:
+   "이미지에서 [객체명]이(가) 감지되었습니다. 신뢰도가 [신뢰도]%로 [높음/중간/낮음]습니다."
 
-예시 1 (질문 포함):
-분석 결과: "[텍스트 분석 결과] 회의록: 프로젝트 X 진행 상황 보고
-[감지된 물체] - 노트북 - 사람 - 책상
-[이미지 라벨] - 회의 - 사무실 - 비즈니스
-[얼굴 감지 결과] 얼굴 1: - 기쁨: VERY_LIKELY
-질문: 이 회의의 분위기는 어떠한가요?"
+2. 그 다음에 객체에 대한 설명을 추가하세요:
+   "이는 [객체의 특징]입니다. [객체의 설명]"
 
-당신의 응답: "## 회의 분위기 분석
+3. 마지막으로 사용자의 질문에 대한 답변을 제공하세요.
 
-이 회의는 프로젝트 X의 진행 상황을 보고하는 자리로, 전반적으로 긍정적이고 활기찬 분위기입니다.
+예시 답변:
+"이미지에서 사과(Apple)가 감지되었습니다. 신뢰도가 89.7%로 매우 높습니다. 이는 빨간색 사과로 보입니다. 사과는 과일의 일종으로, 달콤하고 신맛이 나는 특징이 있습니다."
 
-### 핵심 분석
-* 😊 참석자들의 기쁨 표정이 두드러짐
-* 💻 노트북을 활용한 진행 상황 보고
-* 🏢 사무실 환경에서의 비즈니스 미팅
-
-### 추가 정보
-* 회의실의 밝은 조명과 깔끔한 환경이 긍정적인 분위기를 조성"
-
-예시 2 (질문 없음):
-분석 결과: "[텍스트 분석 결과] 제품명: 스마트 워치 Pro
-[감지된 물체] - 스마트워치 - 손목
-[이미지 라벨] - 전자제품 - 웨어러블
-[로고 감지 결과] - Apple
-[관련 주제] - 건강 모니터링"
-
-당신의 응답: "## 제품 분석
-
-Apple의 스마트 워치 Pro는 건강 모니터링 기능을 강조하는 프리미엄 웨어러블 기기입니다.
-
-예시 3 (질문은 있으나 답변을 찾을 수 없음):
-### 핵심 분석
-* ⌚ 손목에 착용된 스마트워치
-* 🍎 Apple 브랜드 제품
-* ❤️ 건강 모니터링 기능 강조
-
-### 추가 정보
-* 검은색과 흰색의 대비가 강한 세련된 디자인
-* 웨어러블 기술과 건강 관리의 결합을 강조하는 마케팅 이미지"
-
-제공된 이미지 분석 결과를 기반으로 마크다운 형식의 간결한 응답을 제공해주세요.'''
+주의사항:
+- 반드시 감지된 객체 정보를 포함하여 답변해주세요.
+- 객체가 감지되지 않았다면, 그 사실을 먼저 언급해주세요.
+- 사용자의 질문에 직접적으로 답변해주세요.
+- 신뢰도가 80% 이상이면 "매우 높음", 50% 이상이면 "중간", 그 미만이면 "낮음"으로 표현해주세요.'''
                 },
                 { 'role': 'user', 'content': text },
             ],
-            max_tokens=500,  # 더 풍부한 응답을 위해 토큰 수 증가
-            temperature=0.7,  # 창의성을 높이기 위해 temperature 값 증가
+            max_tokens=500,
+            temperature=0.7,
         )
 
         information = completion.choices[0].message.content
@@ -1754,11 +1869,45 @@ def summarize_document():
         if not combined_text:
             return jsonify({'error': '텍스트를 추출할 수 없습니다'}), 400
         
+        # 감지된 객체 정보 가져오기
+        detected_objects = []
+        coordinates = ocr_data.get('coordinates', {})
+        for text, data in coordinates.items():
+            if data.get('match_type') == 'object':
+                detected_objects.append({
+                    'name': text,
+                    'confidence': data.get('confidence', 1.0)
+                })
+        
+        # 객체 정보를 포함한 프롬프트 생성
+        objects_info = ""
+        if detected_objects:
+            objects_info = "\n감지된 객체:\n" + "\n".join([
+                f"- {obj['name']} (신뢰도: {obj['confidence']:.2f})"
+                for obj in detected_objects
+            ])
+        
         # 사용자의 질문이 있는 경우, 질문과 함께 텍스트를 전달
         if message:
-            prompt = f"다음은 이미지에서 추출된 텍스트입니다:\n\n{combined_text}\n\n사용자의 질문: {message}\n\n위 텍스트를 바탕으로 질문에 답변해주세요."
+            prompt = f"""다음은 이미지에서 추출된 텍스트와 감지된 객체 정보입니다:
+
+OCR 텍스트:
+{combined_text}
+
+{objects_info}
+
+사용자의 질문: {message}
+
+위 정보를 바탕으로 질문에 답변해주세요."""
         else:
-            prompt = combined_text
+            prompt = f"""다음은 이미지에서 추출된 텍스트와 감지된 객체 정보입니다:
+
+OCR 텍스트:
+{combined_text}
+
+{objects_info}
+
+위 정보를 바탕으로 이미지를 분석해주세요."""
         
         # OpenAI를 사용하여 텍스트 요약 또는 질문 답변
         summary = getInfoFromTextWithOpenAI(prompt)
@@ -1771,6 +1920,81 @@ def summarize_document():
         
     except Exception as e:
         print(f"요약 중 오류 발생: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/seek-timestamp', methods=['POST'])
+def seek_timestamp():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'JSON 데이터가 필요합니다'}), 400
+            
+        timestamp = data.get('timestamp')
+        video_id = data.get('video_id')
+        session_id = data.get('session_id')
+        
+        if timestamp is None:
+            return jsonify({'error': '타임스탬프가 필요합니다'}), 400
+            
+        print(f"타임스탬프 이동 요청: {timestamp}초, 비디오 ID: {video_id}, 세션 ID: {session_id}")
+        
+        # 타임스탬프를 초 단위로 변환
+        if isinstance(timestamp, str):
+            # "HH:MM:SS" 또는 "MM:SS" 형식의 문자열을 초로 변환
+            parts = timestamp.split(':')
+            if len(parts) == 3:  # HH:MM:SS
+                hours, minutes, seconds = map(float, parts)
+                timestamp = int(hours * 3600 + minutes * 60 + seconds)
+            elif len(parts) == 2:  # MM:SS
+                minutes, seconds = map(float, parts)
+                timestamp = int(minutes * 60 + seconds)
+        
+        # 소수점이 있는 경우 정수로 변환
+        if isinstance(timestamp, float):
+            timestamp = int(timestamp)
+        
+        # 타임스탬프를 HH:MM:SS 형식으로 변환
+        hours = timestamp // 3600
+        minutes = (timestamp % 3600) // 60
+        seconds = timestamp % 60
+        formatted_timestamp = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        
+        # 세션에서 비디오 정보 가져오기
+        if session_id and session_id in ocr_results_cache:
+            videos = ocr_results_cache[session_id].get('videos', [])
+            for video in videos:
+                if video.get('filename') == video_id:
+                    # 해당 타임스탬프 근처의 텍스트 찾기
+                    timeline = video.get('timeline', [])
+                    nearest_text = None
+                    min_diff = float('inf')
+                    
+                    for item in timeline:
+                        item_timestamp = item.get('timestamp', 0)
+                        diff = abs(item_timestamp - timestamp)
+                        if diff < min_diff:
+                            min_diff = diff
+                            nearest_text = item.get('texts', [])
+                    
+                    return jsonify({
+                        'success': True,
+                        'timestamp': timestamp,
+                        'formatted_timestamp': formatted_timestamp,
+                        'video_id': video_id,
+                        'nearest_text': nearest_text,
+                        'session_id': session_id
+                    })
+        
+        return jsonify({
+            'success': True,
+            'timestamp': timestamp,
+            'formatted_timestamp': formatted_timestamp,
+            'video_id': video_id,
+            'session_id': session_id
+        })
+        
+    except Exception as e:
+        print(f"타임스탬프 이동 중 오류 발생: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':

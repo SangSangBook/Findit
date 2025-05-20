@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
 import NetflixLoader from './components/NetflixLoader';
 import MediaUploader from './components/MediaUploader';
-import { ImageType, IMAGE_TYPE_ICONS, IMAGE_TYPE_LABELS } from './types';
+import { ImageType, IMAGE_TYPE_ICONS, IMAGE_TYPE_LABELS, IMAGE_TYPE_COLORS } from './types';
 import ImageTypeSelector from './components/ImageTypeSelector';
+import { koreanToEnglish, englishToKorean, findMatches } from './utils/languageMapping';
 
 interface CharBox {
   x1: number;
@@ -19,6 +20,8 @@ interface DetectedObject {
   fileName?: string;
   pageIndex?: number;
   match_type?: string;
+  isObject?: boolean;
+  confidence: number;
 }
 
 interface MediaItem {
@@ -221,6 +224,7 @@ const App: React.FC = () => {
         const data = await response.json();
         console.log('=== 서버 응답 데이터 ===');
         console.log('업로드 성공:', data);
+        console.log('타임라인 데이터:', data.file?.timeline);
 
         if (!sessionId) {
           setSessionId(data.session_id);
@@ -250,8 +254,11 @@ const App: React.FC = () => {
         setMediaType('video');
         setMediaUrl(videoUrl);
         
-        if (data.file.timeline) {
+        if (data.file?.timeline) {
+          console.log('타임라인 설정:', data.file.timeline);
           setTimeline(data.file.timeline);
+        } else {
+          console.log('타임라인 데이터가 없습니다');
         }
       } else {
         for (let i = 0; i < files.length; i++) {
@@ -338,7 +345,6 @@ const App: React.FC = () => {
   const handleSearch = async (mode: 'normal' | 'smart') => {
     if (!searchTerm || !selectedMedia || !sessionId) {
       setDetectedObjects([]);
-      setTimeline([]);
       setNoResults(false);
       setSearchResultPages([]);
       setPageNotification({ show: false, direction: null });
@@ -359,16 +365,15 @@ const App: React.FC = () => {
       formData.append('session_id', sessionId);
       formData.append('query', searchTerm);
       formData.append('mode', mode);
+      formData.append('detect_objects', 'true');
+      formData.append('perform_ocr', 'true');
+      formData.append('detect_text', 'true');
       
       if (cachedResult) {
         formData.append('ocr_text', cachedResult.text);
         formData.append('detected_objects', JSON.stringify(cachedResult.objects));
       } else {
         formData.append('images[]', selectedMedia.file);
-      }
-
-      if (mode === 'smart') {
-        formData.append('smart_search', 'true');
       }
 
       const response = await fetch('http://localhost:5001/analyze-image', {
@@ -383,8 +388,9 @@ const App: React.FC = () => {
 
       const data = await response.json();
       console.log('=== 서버 응답 데이터 ===');
+      console.log('감지된 객체:', data.detected_objects);
       console.log('전체 데이터:', JSON.stringify(data, null, 2));
-      
+
       if (data.ocr_text && data.objects && !cachedResult) {
         console.log('새로운 OCR 결과를 캐시에 저장');
         setOcrCache(prev => new Map(prev).set(selectedMedia.id, {
@@ -393,41 +399,138 @@ const App: React.FC = () => {
         }));
       }
       
+      const allResults: DetectedObject[] = [];
+      
       if (data.matches && data.matches.length > 0) {
-        console.log('검색 결과 매칭:', data.matches);
-        const searchResults: DetectedObject[] = data.matches
+        const textResults = data.matches
           .filter((obj: any) => {
-            // 정확한 일치 또는 의미적으로 관련된 매치만 포함
             const isExactMatch = obj.text.toLowerCase().includes(searchTerm.toLowerCase());
             const isRelevantMatch = obj.match_type === 'semantic' && obj.confidence > 0.7;
-            return isExactMatch || isRelevantMatch;
+            const isPartialMatch = obj.text.toLowerCase().split(' ').some((word: string) => 
+              word.includes(searchTerm.toLowerCase()) || searchTerm.toLowerCase().includes(word)
+            );
+            return isExactMatch || isRelevantMatch || isPartialMatch;
           })
-          .map((obj: any) => {
-            console.log('매칭된 객체:', obj);
-            const matchType = obj.text.toLowerCase().includes(searchTerm.toLowerCase()) ? 'exact' : 'semantic';
-            return {
-              text: obj.text,
-              bbox: obj.bbox,
-              confidence: obj.confidence,
-              pageIndex: currentPage,
-              match_type: matchType
-            };
-          });
+          .map((obj: any) => ({
+            text: obj.text,
+            bbox: obj.bbox,
+            confidence: obj.confidence,
+            pageIndex: currentPage,
+            match_type: 'text',
+            isObject: false
+          }));
+        console.log('텍스트 검색 결과:', textResults);
+        allResults.push(...textResults);
+      }
+      
+      if (data.detected_objects && data.detected_objects.length > 0) {
+        console.log('=== 객체 매칭 시작 ===');
+        console.log('감지된 객체들:', data.detected_objects);
+        console.log('검색어:', searchTerm);
         
-        console.log('변환된 검색 결과:', searchResults);
-        setDetectedObjects(searchResults);
+        const objectResults = data.detected_objects
+          .filter((obj: any) => {
+            const objectName = (obj.name || obj.text || '').toLowerCase();
+            const searchTermLower = searchTerm.toLowerCase();
+            
+            console.log('=== 현재 객체 매칭 시도 ===');
+            console.log('객체 정보:', {
+              originalName: obj.name || obj.text,
+              lowerName: objectName,
+              searchTerm: searchTermLower,
+              bbox: obj.bbox,
+              confidence: obj.confidence
+            });
+            
+            const directMatch = objectName.includes(searchTermLower) || searchTermLower.includes(objectName);
+            console.log('직접 매칭 결과:', directMatch);
+            
+            const koreanMatches = koreanToEnglish[searchTermLower] || [];
+            const englishMatches = englishToKorean[objectName] || [];
+            
+            console.log('매핑 정보:', {
+              koreanMatches,
+              englishMatches,
+              koreanToEnglish: koreanToEnglish[searchTermLower],
+              englishToKorean: englishToKorean[objectName]
+            });
+            
+            const mappedMatch = koreanMatches.some(english => {
+              const match = objectName.includes(english.toLowerCase());
+              console.log(`매핑 시도: ${english} -> ${objectName} = ${match}`);
+              return match;
+            }) || englishMatches.some(korean => {
+              const match = searchTermLower.includes(korean);
+              console.log(`매핑 시도: ${korean} -> ${searchTermLower} = ${match}`);
+              return match;
+            });
+            console.log('매핑 매칭 결과:', mappedMatch);
+
+            const isKoreanSearch = /[가-힣]/.test(searchTerm);
+            const koreanObjectMatch = isKoreanSearch && objectName.includes(searchTermLower);
+            console.log('한글 매칭 결과:', { isKoreanSearch, koreanObjectMatch });
+            
+            const isEnglishSearch = /[a-zA-Z]/.test(searchTerm);
+            const englishObjectMatch = isEnglishSearch && objectName.includes(searchTermLower);
+            console.log('영어 매칭 결과:', { isEnglishSearch, englishObjectMatch });
+            
+            const additionalMappedMatch = isKoreanSearch && koreanMatches.some(english => {
+              const match = objectName.includes(english.toLowerCase());
+              console.log(`추가 매핑 시도: ${english} -> ${objectName} = ${match}`);
+              return match;
+            });
+            console.log('추가 매핑 매칭 결과:', additionalMappedMatch);
+            
+            const isMatch = directMatch || mappedMatch || koreanObjectMatch || englishObjectMatch || additionalMappedMatch;
+            
+            console.log('최종 매칭 결과:', {
+              directMatch,
+              mappedMatch,
+              koreanObjectMatch,
+              englishObjectMatch,
+              additionalMappedMatch,
+              isMatch
+            });
+            
+            return isMatch;
+          })
+          .map((obj: any) => ({
+            text: obj.name || obj.text,
+            bbox: obj.bbox,
+            confidence: obj.confidence,
+            pageIndex: currentPage,
+            match_type: 'object',
+            isObject: true
+          }));
+        
+        console.log('최종 매칭된 객체:', objectResults);
+        allResults.push(...objectResults);
+      }
+      
+      if (allResults.length > 0) {
+        console.log('최종 검색 결과:', allResults);
+        setDetectedObjects(allResults);
         setNoResults(false);
-        setTimeline([]);
+        
+        // 타임라인 업데이트 (기존 타임라인 유지하면서 하이라이트만 업데이트)
+        if (timeline.length > 0) {
+          const updatedTimeline = timeline.map(item => ({
+            ...item,
+            texts: item.texts.map(text => ({
+              ...text,
+              color: text.text.toLowerCase().includes(searchTerm.toLowerCase()) ? '#007bff' : undefined
+            }))
+          }));
+          setTimeline(updatedTimeline);
+        }
 
         const pages = [currentPage];
-        console.log('검색 결과가 있는 페이지들:', pages);
         setSearchResultPages(pages);
         setPageNotification({ show: false, direction: null });
       } else {
         console.log('검색 결과 없음');
         setDetectedObjects([]);
         setNoResults(true);
-        setTimeline([]);
         setSearchResultPages([]);
         setPageNotification({ show: false, direction: null });
       }
@@ -444,11 +547,37 @@ const App: React.FC = () => {
     if (newSearchTerm === '') {
       setDetectedObjects([]);
       setNoResults(false);
+      // 검색어가 비어있을 때 타임라인 하이라이트 제거
+      if (timeline.length > 0) {
+        const resetTimeline = timeline.map(item => ({
+          ...item,
+          texts: item.texts.map(text => ({
+            ...text,
+            color: undefined
+          }))
+        }));
+        setTimeline(resetTimeline);
+      }
+    } else {
+      // 검색어가 있을 때 타임라인 하이라이트
+      if (timeline.length > 0) {
+        const updatedTimeline = timeline.map(item => ({
+          ...item,
+          texts: item.texts.map(text => ({
+            ...text,
+            color: text.text.toLowerCase().includes(newSearchTerm.toLowerCase()) ? '#007bff' : undefined
+          }))
+        }));
+        setTimeline(updatedTimeline);
+      }
     }
   };
 
   const seekToTimestamp = (timestamp: number) => {
+    console.log('Seeking to timestamp:', timestamp);
+    
     if (youtubePlayerRef.current) {
+      console.log('Using YouTube player');
       youtubePlayerRef.current.contentWindow?.postMessage(
         JSON.stringify({
           event: 'command',
@@ -457,6 +586,10 @@ const App: React.FC = () => {
         }),
         '*'
       );
+    } else if (videoRef.current) {
+      console.log('Using video element');
+      videoRef.current.currentTime = timestamp;
+      videoRef.current.play();
     }
   };
 
@@ -883,6 +1016,61 @@ const App: React.FC = () => {
     };
   }, [modalImageRef.current]);
 
+  const drawDetectedObjects = (ctx: CanvasRenderingContext2D, image: HTMLImageElement, detectedObjects: any[]) => {
+    // 캔버스 크기를 이미지 크기와 동일하게 설정
+    ctx.canvas.width = image.width;
+    ctx.canvas.height = image.height;
+    
+    // 이미지 그리기
+    ctx.drawImage(image, 0, 0, image.width, image.height);
+    
+    // 감지된 객체 그리기
+    detectedObjects.forEach(obj => {
+        const bbox = obj.bbox;
+        const x = bbox.x1 * image.width;
+        const y = bbox.y1 * image.height;
+        const width = (bbox.x2 - bbox.x1) * image.width;
+        const height = (bbox.y2 - bbox.y1) * image.height;
+        
+        // 객체 인식 결과인 경우 (녹색 네모)
+        if (obj.match_type === 'object') {
+            ctx.strokeStyle = 'green';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, width, height);
+            
+            // 텍스트 표시
+            ctx.fillStyle = 'green';
+            ctx.font = '16px Arial';
+            ctx.fillText(obj.text, x, y - 5);
+        }
+        // 텍스트 검색 결과인 경우 (빨간 동그라미)
+        else if (obj.match_type === 'text') {
+            const centerX = x + width / 2;
+            const centerY = y + height / 2;
+            const radius = Math.min(width, height) * 0.3;  // 동그라미 크기 증가
+            
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            // 텍스트 표시
+            ctx.fillStyle = 'red';
+            ctx.font = '16px Arial';
+            ctx.fillText(obj.text, x, y - 5);
+        }
+    });
+  };
+
+  const handleTaskClick = async (taskTitle: string) => {
+    // chatMessage 상태를 task 제목으로 설정
+    setChatMessage(taskTitle);
+    
+    // handleChat 함수를 호출하여 분석 수행
+    await handleChat();
+  };
+
   if (isLoading) {
     return <NetflixLoader />;
   }
@@ -1070,92 +1258,21 @@ const App: React.FC = () => {
                         </div>
                       </div>
                     )}
-                    {detectedObjects
-                      .filter(obj => obj.pageIndex === currentPage)
-                      .map((obj, index) => {
-                        if (!imageRef.current) return null;
-                        const imgElement = imageRef.current;
-                        const rect = imgElement.getBoundingClientRect();
-                        const bbox = obj.bbox;
-                        
-                        const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
-                        
-                        const scaleX = rect.width / imgElement.naturalWidth;
-                        const scaleY = rect.height / imgElement.naturalHeight;
-                        
-                        const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
-                        const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
-                        const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
-                        const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
-                        
-                        const lowerText = obj.text.toLowerCase();
-                        const lowerSearch = searchTerm.toLowerCase();
-                        const startIdx = lowerText.indexOf(lowerSearch);
-                        
-                        if (obj.match_type === 'semantic') {
-                          const centerX = (x1 + x2) / 2;
-                          const centerY = (y1 + y2) / 2;
-                          const width = x2 - x1;
-                          const height = y2 - y1;
-                          const radius = Math.max(width, height) * 0.15;
-                          
-                          const displayCenterX = centerX * scaleX;
-                          const displayCenterY = centerY * scaleY;
-                          const displayRadius = radius * scaleX;
-                          
-                          return (
-                            <div
-                              key={index}
-                              style={{
-                                position: 'absolute',
-                                left: `${displayCenterX - displayRadius}px`,
-                                top: `${displayCenterY - displayRadius}px`,
-                                width: `${displayRadius * 2}px`,
-                                height: `${displayRadius * 2}px`,
-                                border: '2px solid blue',
-                                borderRadius: '50%',
-                                pointerEvents: 'none',
-                                zIndex: 1,
-                              }}
-                            />
-                          );
-                        }
-                        
-                        if (startIdx === -1) return null;
-                        
-                        const totalLen = obj.text.length;
-                        const searchLen = searchTerm.length;
-                        const charWidth = (x2 - x1) / totalLen;
-                        const wordX1 = x1 + charWidth * startIdx;
-                        const wordX2 = wordX1 + charWidth * searchLen;
-                        
-                        const centerX = (wordX1 + wordX2) / 2;
-                        const centerY = (y1 + y2) / 2;
-                        const wordWidth = wordX2 - wordX1;
-                        const wordHeight = y2 - y1;
-                        const radius = Math.max(wordWidth, wordHeight) * 0.15;
-                        
-                        const displayCenterX = centerX * scaleX;
-                        const displayCenterY = centerY * scaleY;
-                        const displayRadius = radius * scaleX;
-                        
-                        return (
-                          <div
-                            key={index}
-                            style={{
-                              position: 'absolute',
-                              left: `${displayCenterX - displayRadius}px`,
-                              top: `${displayCenterY - displayRadius}px`,
-                              width: `${displayRadius * 2}px`,
-                              height: `${displayRadius * 2}px`,
-                              border: '2px solid red',
-                              borderRadius: '50%',
-                              pointerEvents: 'none',
-                              zIndex: 1,
-                            }}
-                          />
-                        );
-                      })}
+                    {selectedImageType && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          right: 10,
+                          bottom: 10,
+                          zIndex: 10
+                        }}
+                      >
+                        <ImageTypeSelector
+                          selectedType={selectedImageType}
+                          onTypeSelect={handleImageTypeSelect}
+                        />
+                      </div>
+                    )}
                   </div>
                   <div className="nav-button-container">
                     <button 
@@ -1259,13 +1376,18 @@ const App: React.FC = () => {
                 {taskSuggestions.map((task, index) => (
                   <div
                     key={index}
+                    onClick={() => handleTaskClick(task.task)}
                     style={{
                       padding: '15px',
                       backgroundColor: '#fff',
                       borderRadius: '8px',
                       border: '1px solid #e0e0e0',
-                      boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease'
                     }}
+                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
+                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#fff'}
                   >
                     <div style={{ 
                       display: 'flex', 
@@ -1304,10 +1426,19 @@ const App: React.FC = () => {
           </div>
         </div>
 
+        {noResults && (
+          <div className="no-results-message">
+            <i className="fas fa-search"></i>
+            <p>검색 결과가 없습니다.</p>
+            <p className="sub-text">다른 검색어를 입력하거나 OCR을 새로고침해보세요.</p>
+          </div>
+        )}
+
         <div className="youtube-input-container">
           <div className="youtube-preview">
             {selectedVideo && selectedVideo.type === 'video' && selectedVideo.url.startsWith('blob:') ? (
               <video
+                ref={videoRef}
                 src={selectedVideo.url}
                 controls
                 style={{ width: '100%', height: '100%' }}
@@ -1390,14 +1521,6 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {noResults && (
-          <div className="no-results-message">
-            <i className="fas fa-search"></i>
-            <p>검색 결과가 없습니다.</p>
-            <p className="sub-text">다른 검색어를 입력하거나 OCR을 새로고침해보세요.</p>
-          </div>
-        )}
-
         {summary && (
           <div className="summary-container">
             <div className="summary-content">
@@ -1408,37 +1531,40 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {timeline.length > 0 && (
+        {mediaType === 'video' && timeline.length > 0 && (
           <div className="timeline-container">
-            <h3 style={{ textAlign: 'left', marginTop: '10px', marginBottom: '30px' ,marginLeft: '10px' }}>타임라인</h3>
+            <h3>타임라인</h3>
             <div className="timeline">
-              {timeline.map((item, index) => (
-                <div 
-                  key={index} 
-                  className="timeline-item"
-                  onClick={() => seekToTimestamp(item.timestamp)}
-                >
-                  <span className="timestamp">
-                    {Math.floor(item.timestamp / 60)}:{Math.floor(item.timestamp % 60).toString().padStart(2, '0')}
-                  </span>
-                  <div className="texts">
-                    {item.texts.map((text, i) => {
-                      const isMatch = searchTerm && text.text.toLowerCase().includes(searchTerm.toLowerCase());
-                      return (
-                        <div 
-                          key={i} 
-                          className="detected-text"
-                          style={{ 
-                            backgroundColor: isMatch ? 'rgba(0, 123, 255, 0.3)' : 'transparent'
-                          }}
-                        >
+              {timeline.map((item, index) => {
+                const minutes = Math.floor(item.timestamp / 60);
+                const seconds = Math.floor(item.timestamp % 60);
+                const formattedTime = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                
+                return (
+                  <div
+                    key={index}
+                    className="timeline-item"
+                    onClick={() => {
+                      console.log('Timeline item clicked:', item.timestamp);
+                      console.log('Video ref:', videoRef.current);
+                      console.log('YouTube ref:', youtubePlayerRef.current);
+                      seekToTimestamp(item.timestamp);
+                    }}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <div className="timestamp">
+                      {formattedTime}
+                    </div>
+                    <div className="texts">
+                      {item.texts.map((text, textIndex) => (
+                        <div key={textIndex} className="text-item">
                           {text.text}
                         </div>
-                      );
-                    })}
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -1496,6 +1622,21 @@ const App: React.FC = () => {
               }}
               onLoad={handleModalImageResize}
             />
+            {selectedImageType && (
+              <div
+                style={{
+                  position: 'absolute',
+                  right: 20,
+                  bottom: 20,
+                  zIndex: 20
+                }}
+              >
+                <ImageTypeSelector
+                  selectedType={selectedImageType}
+                  onTypeSelect={handleImageTypeSelect}
+                />
+              </div>
+            )}
             {detectedObjects
               .filter(obj => obj.pageIndex === currentPage)
               .map((obj, index) => {
@@ -1503,84 +1644,81 @@ const App: React.FC = () => {
                 const imgElement = modalImageRef.current;
                 const rect = imgElement.getBoundingClientRect();
                 const bbox = obj.bbox;
-                
                 const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
-                
                 const scaleX = rect.width / imgElement.naturalWidth;
                 const scaleY = rect.height / imgElement.naturalHeight;
-                
                 const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
                 const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
                 const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
                 const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
-                
-                const lowerText = obj.text.toLowerCase();
-                const lowerSearch = searchTerm.toLowerCase();
-                const startIdx = lowerText.indexOf(lowerSearch);
-                
-                if (obj.match_type === 'semantic') {
+                // 객체 인식 결과: 녹색 네모
+                if (obj.isObject || obj.match_type === 'object') {
+                  const displayX1 = x1 * scaleX;
+                  const displayY1 = y1 * scaleY;
+                  const displayWidth = (x2 - x1) * scaleX;
+                  const displayHeight = (y2 - y1) * scaleY;
+                  return (
+                    <div key={index}>
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: `${displayX1}px`,
+                          top: `${displayY1}px`,
+                          width: `${displayWidth}px`,
+                          height: `${displayHeight}px`,
+                          border: '2px solid #00ff00',
+                          pointerEvents: 'none',
+                          zIndex: 1,
+                        }}
+                      />
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: `${displayX1}px`,
+                          top: `${displayY1 - 20}px`,
+                          backgroundColor: 'rgba(0, 255, 0, 0.8)',
+                          color: 'white',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          fontSize: '12px',
+                          pointerEvents: 'none',
+                          zIndex: 1,
+                        }}
+                      >
+                        {obj.text}
+                      </div>
+                    </div>
+                  );
+                }
+                // 텍스트 검색 결과: 빨간 동그라미
+                if (obj.match_type === 'text') {
                   const centerX = (x1 + x2) / 2;
                   const centerY = (y1 + y2) / 2;
                   const width = x2 - x1;
                   const height = y2 - y1;
-                  const radius = Math.max(width, height) * 0.15;
-                  
+                  const radius = Math.max(width, height) * 0.3;
                   const displayCenterX = centerX * scaleX;
                   const displayCenterY = centerY * scaleY;
                   const displayRadius = radius * scaleX;
-                  
                   return (
-                    <div
-                      key={index}
-                      style={{
-                        position: 'absolute',
-                        left: `${displayCenterX - displayRadius}px`,
-                        top: `${displayCenterY - displayRadius}px`,
-                        width: `${displayRadius * 2}px`,
-                        height: `${displayRadius * 2}px`,
-                        border: '2px solid blue',
-                        borderRadius: '50%',
-                        pointerEvents: 'none',
-                        zIndex: 1,
-                      }}
-                    />
+                    <div key={index}>
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: `${displayCenterX - displayRadius}px`,
+                          top: `${displayCenterY - displayRadius}px`,
+                          width: `${displayRadius * 2}px`,
+                          height: `${displayRadius * 2}px`,
+                          border: '2px solid red',
+                          borderRadius: '50%',
+                          pointerEvents: 'none',
+                          zIndex: 1,
+                        }}
+                      />
+                    </div>
                   );
                 }
-                
-                if (startIdx === -1) return null;
-                
-                const totalLen = obj.text.length;
-                const searchLen = searchTerm.length;
-                const charWidth = (x2 - x1) / totalLen;
-                const wordX1 = x1 + charWidth * startIdx;
-                const wordX2 = wordX1 + charWidth * searchLen;
-                
-                const centerX = (wordX1 + wordX2) / 2;
-                const centerY = (y1 + y2) / 2;
-                const wordWidth = wordX2 - wordX1;
-                const wordHeight = y2 - y1;
-                const radius = Math.max(wordWidth, wordHeight) * 0.15;
-                
-                const displayCenterX = centerX * scaleX;
-                const displayCenterY = centerY * scaleY;
-                const displayRadius = radius * scaleX;
-                
-                return (
-                  <div
-                    key={index}
-                    style={{
-                      position: 'absolute',
-                      left: `${displayCenterX - displayRadius}px`,
-                      top: `${displayCenterY - displayRadius}px`,
-                      width: `${displayRadius * 2}px`,
-                      height: `${displayRadius * 2}px`,
-                      border: '2px solid red',
-                      borderRadius: '50%',
-                      pointerEvents: 'none',
-                      zIndex: 1,
-                    }}
-                  />
-                );
+                return null;
               })}
           </div>
         </div>
