@@ -406,10 +406,10 @@ const App: React.FC = () => {
     const newSearchTerm = e.target.value;
     setSearchTerm(newSearchTerm);
     
+    // 검색어가 비어있을 때 검색 결과만 초기화
     if (newSearchTerm === '') {
       setDetectedObjects([]);
       setNoResults(false);
-      setTimeline([]);
     }
   };
 
@@ -621,33 +621,38 @@ const App: React.FC = () => {
         throw new Error(data.error);
       }
 
-      if (data.smart_search) {
-        setSmartSearchResult({
-          predicted_keywords: data.smart_search.predicted_keywords || [],
-          action_recommendations: data.smart_search.action_recommendations || [],
-          document_type: data.smart_search.document_type,
-          legal_updates: data.smart_search.legal_updates || [],
-          task_suggestions: data.smart_search.task_suggestions || []
-        });
-      }
-
-      setSelectedVideo({
+      // YouTube 비디오 아이템 생성
+      const newVideoItem: MediaItem = {
         id: Date.now().toString(),
         type: 'video',
         url: videoId,
         file: new File([], 'youtube-video.mp4'),
         sessionId: data.session_id
-      });
+      };
+
+      // 비디오 그리드에 추가
+      setVideoItems(prev => [...prev, newVideoItem]);
+      setSelectedVideo(newVideoItem);
+      setMediaType('video');
+      setMediaUrl(videoId);
       setYoutubeUrl('');
+
+      // OCR 텍스트가 있으면 태스크 제안 실행
+      if (data.ocr_text) {
+        console.log('=== OCR 텍스트 추출 완료 ===');
+        console.log('OCR 텍스트:', data.ocr_text);
+        setOcrText(data.ocr_text);
+        
+        console.log('=== 태스크 제안 시작 ===');
+        await getTaskSuggestions(data.ocr_text);
+      }
       
+      // 타임라인 설정
       if (data.timeline) {
         setTimeline(data.timeline);
       }
       
-      if (data.ocr_text) {
-        setOcrText(data.ocr_text);
-      }
-      
+      // 세션 ID 설정
       if (data.session_id) {
         setSessionId(data.session_id);
       }
@@ -1106,7 +1111,7 @@ const App: React.FC = () => {
             ) : (
               <div className="media-placeholder">
                 <i className="fas fa-image"></i>
-                <p>이미지나 영상을 업로드하세요</p>
+                <p>이미지를 업로드하세요</p>
               </div>
             )}
 
@@ -1253,7 +1258,7 @@ const App: React.FC = () => {
             ) : (
               <div className="youtube-placeholder">
                 <i className="fab fa-youtube"></i>
-                <p>YouTube 링크를 업로드하세요</p>
+                <p>영상을 업로드하세요</p>
               </div>
             )}
           </div>
@@ -1303,7 +1308,16 @@ const App: React.FC = () => {
                   overflow: 'hidden'
                 }}
               >
-                <video src={media.url} className="media-preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                {media.url.startsWith('blob:') ? (
+                  <video src={media.url} className="media-preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  <img 
+                    src={`https://img.youtube.com/vi/${media.url}/mqdefault.jpg`} 
+                    alt="YouTube thumbnail" 
+                    className="media-preview" 
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                  />
+                )}
               </div>
             ))}
           </div>
