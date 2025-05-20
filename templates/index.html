@@ -19,8 +19,8 @@
             </div>
         </div>
         <div class="youtube-controls">
-            <h3>YouTube URL</h3>
-            <div class="youtube-input-container">
+            <h3 class="youtube-title">YouTube URL</h3>
+            <div class="youtube-input-wrapper">
                 <input type="text" id="youtube-url" placeholder="YouTube URL을 입력하세요" class="youtube-input">
                 <button id="process-youtube" class="youtube-button">
                     <i class="fab fa-youtube"></i>
@@ -130,5 +130,22 @@
 
     .add-task-btn:hover {
         background: #45a049;
+    }
+
+    .youtube-controls {
+        padding: 20px;
+    }
+
+    .youtube-controls h3 {
+        margin-left: 30px;
+        margin-bottom: 15px;
+    }
+
+    .youtube-input-wrapper {
+        margin-left: 30px;
+    }
+
+    .youtube-title {
+        margin-right: 30px !important;
     }
 </style> 

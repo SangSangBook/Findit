@@ -1290,7 +1290,7 @@ const App: React.FC = () => {
                 type="text"
                 value={chatMessage}
                 onChange={(e) => setChatMessage(e.target.value)}
-                placeholder="질문을 입력하세요..."
+                placeholder="검색어를 입력해주세요"
                 className="chat-input"
               />
               <button 
