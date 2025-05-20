@@ -45,6 +45,12 @@ interface ApiResponse {
   original_text?: string;
 }
 
+interface TaskSuggestion {
+  task: string;
+  description: string;
+  priority: 'high' | 'medium' | 'low';
+}
+
 interface SmartSearchResult {
   predicted_keywords: string[];
   action_recommendations: {
@@ -58,11 +64,14 @@ interface SmartSearchResult {
     source: string;
     date: string;
   }[];
+  task_suggestions?: TaskSuggestion[];
 }
 
 const App: React.FC = () => {
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
+  const [videoItems, setVideoItems] = useState<MediaItem[]>([]);
   const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
+  const [selectedVideo, setSelectedVideo] = useState<MediaItem | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -105,6 +114,73 @@ const App: React.FC = () => {
   const [isSmartSearching, setIsSmartSearching] = useState(false);
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const [modalImageSize, setModalImageSize] = useState({ width: 0, height: 0 });
+  const [taskSuggestions, setTaskSuggestions] = useState<TaskSuggestion[]>([]);
+  const [isTaskSuggesting, setIsTaskSuggesting] = useState(false);
+
+  const getTaskSuggestions = async (text: string) => {
+    console.log('=== 태스크 제안 시작 ===');
+    console.log('OCR 텍스트:', text);
+    
+    setIsTaskSuggesting(true);
+    try {
+      const requestData = {
+        text: text,
+        type: 'task_suggestion'
+      };
+      console.log('요청 데이터:', requestData);
+
+      const response = await fetch('http://localhost:5001/analyze-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(requestData)
+      });
+
+      console.log('태스크 제안 응답 상태:', response.status);
+      console.log('태스크 제안 응답 헤더:', response.headers);
+
+      const responseText = await response.text();
+      console.log('태스크 제안 응답 텍스트:', responseText);
+
+      if (response.ok) {
+        try {
+          const data = JSON.parse(responseText);
+          console.log('태스크 제안 응답 데이터:', data);
+          
+          if (data.suggestions) {
+            console.log('태스크 제안 목록:', data.suggestions);
+            setTaskSuggestions(data.suggestions);
+          } else if (data.task_suggestions) {
+            console.log('태스크 제안 목록 (task_suggestions):', data.task_suggestions);
+            setTaskSuggestions(data.task_suggestions);
+          } else {
+            console.log('태스크 제안 데이터가 없습니다.');
+            console.log('전체 응답 데이터:', data);
+            setTaskSuggestions([]);
+          }
+        } catch (parseError) {
+          console.error('JSON 파싱 오류:', parseError);
+          console.log('파싱 실패한 응답 텍스트:', responseText);
+          setTaskSuggestions([]);
+        }
+      } else {
+        console.error('태스크 제안 실패:', response.status);
+        console.error('에러 응답:', responseText);
+        setTaskSuggestions([]);
+      }
+    } catch (error) {
+      console.error('태스크 제안 중 오류:', error);
+      if (error instanceof Error) {
+        console.error('에러 메시지:', error.message);
+        console.error('에러 스택:', error.stack);
+      }
+      setTaskSuggestions([]);
+    } finally {
+      setIsTaskSuggesting(false);
+    }
+  };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -116,17 +192,17 @@ const App: React.FC = () => {
     setIsProcessing(true);
     setIsAnalyzing(true);
     setError(null);
+    setTaskSuggestions([]);
 
     try {
-      // 파일 타입에 따라 다른 엔드포인트 사용
-      const file = files[0];  // 비디오는 한 번에 하나만 업로드
+      const file = files[0];
       const isVideo = file.type.startsWith('video/');
       const formData = new FormData();
       
       if (isVideo) {
         formData.append('video', file);
-        formData.append('query', searchTerm);
-        formData.append('mode', searchMode);
+        formData.append('query', '');
+        formData.append('mode', 'normal');
         
         const response = await fetch('http://localhost:5001/upload-video', {
           method: 'POST',
@@ -145,22 +221,22 @@ const App: React.FC = () => {
         console.log('=== 서버 응답 데이터 ===');
         console.log('업로드 성공:', data);
 
-        // 세션 ID 저장
         if (!sessionId) {
           setSessionId(data.session_id);
         }
 
-        // OCR 텍스트 저장
         if (data.text) {
+          console.log('=== OCR 텍스트 추출 완료 ===');
           console.log('OCR 텍스트:', data.text);
           setOcrText(data.text);
+          
+          console.log('=== 태스크 제안 시작 ===');
+          await getTaskSuggestions(data.text);
         }
 
-        // 비디오 URL 생성
         const videoUrl = URL.createObjectURL(file);
 
-        // 비디오 아이템 생성
-        const newMediaItem: MediaItem = {
+        const newVideoItem: MediaItem = {
           id: Date.now().toString(),
           type: 'video',
           url: videoUrl,
@@ -168,20 +244,19 @@ const App: React.FC = () => {
           sessionId: sessionId || data.session_id,
         };
 
-        setMediaItems(prev => [...prev, newMediaItem]);
-        setSelectedMedia(newMediaItem);
+        setVideoItems(prev => [...prev, newVideoItem]);
+        setSelectedVideo(newVideoItem);
         setMediaType('video');
         setMediaUrl(videoUrl);
         
-        // 타임라인 설정
         if (data.file.timeline) {
           setTimeline(data.file.timeline);
         }
       } else {
-        // 이미지 파일 업로드
         for (let i = 0; i < files.length; i++) {
           formData.append('images[]', files[i]);
         }
+        formData.append('mode', 'normal');
 
         const response = await fetch('http://localhost:5001/upload-image', {
           method: 'POST',
@@ -200,24 +275,24 @@ const App: React.FC = () => {
         console.log('=== 서버 응답 데이터 ===');
         console.log('업로드 성공:', data);
 
-        // 세션 ID 저장
         if (!sessionId) {
           setSessionId(data.session_id);
         }
 
-        // OCR 텍스트 저장
         if (data.text) {
+          console.log('=== OCR 텍스트 추출 완료 ===');
           console.log('OCR 텍스트:', data.text);
           setOcrText(data.text);
+          
+          console.log('=== 태스크 제안 시작 ===');
+          await getTaskSuggestions(data.text);
         }
 
-        // 이미지 타입 설정
         if (data.image_type) {
           console.log('감지된 이미지 타입:', data.image_type);
           setSelectedImageType(data.image_type as ImageType);
         }
 
-        // 각 파일에 대한 미디어 아이템 생성
         const newMediaItems: MediaItem[] = Array.from(files).map((file, index) => {
           const url = URL.createObjectURL(file);
           return {
@@ -230,14 +305,12 @@ const App: React.FC = () => {
           };
         });
 
-        // 새로운 미디어 아이템을 기존 아이템에 추가하고 현재 페이지를 마지막 페이지로 설정
         setMediaItems(prev => {
           const updatedItems = [...prev, ...newMediaItems];
           setCurrentPage(updatedItems.length - 1);
           return updatedItems;
         });
 
-        // 마지막 미디어 아이템을 선택
         const lastMediaItem = newMediaItems[newMediaItems.length - 1];
         setSelectedMedia(lastMediaItem);
         setMediaType('image');
@@ -249,6 +322,10 @@ const App: React.FC = () => {
     } catch (error) {
       console.error('=== 오류 발생 ===');
       console.error('오류 상세:', error);
+      if (error instanceof Error) {
+        console.error('에러 메시지:', error.message);
+        console.error('에러 스택:', error.stack);
+      }
       setError(error instanceof Error ? error.message : '업로드 중 오류가 발생했습니다');
     } finally {
       console.log('=== 처리 완료 ===');
@@ -294,12 +371,6 @@ const App: React.FC = () => {
       console.log('=== 서버 응답 데이터 ===');
       console.log('전체 데이터:', JSON.stringify(data, null, 2));
       
-      // OCR 텍스트 저장
-      if (data.text) {
-        console.log('OCR 텍스트:', data.text);
-        setOcrText(data.text);
-      }
-      
       if (data.matches && data.matches.length > 0) {
         const searchResults: DetectedObject[] = data.matches.map((obj: any) => ({
           text: obj.text,
@@ -314,7 +385,6 @@ const App: React.FC = () => {
         setNoResults(false);
         setTimeline([]);
 
-        // 검색 결과가 있는 페이지 번호 저장
         const pages = [currentPage];
         console.log('검색 결과가 있는 페이지들:', pages);
         setSearchResultPages(pages);
@@ -336,7 +406,6 @@ const App: React.FC = () => {
     const newSearchTerm = e.target.value;
     setSearchTerm(newSearchTerm);
     
-    // 검색어가 비어있을 때만 검색 결과를 초기화
     if (newSearchTerm === '') {
       setDetectedObjects([]);
       setNoResults(false);
@@ -346,7 +415,6 @@ const App: React.FC = () => {
 
   const seekToTimestamp = (timestamp: number) => {
     if (youtubePlayerRef.current) {
-      // YouTube Player API를 통해 시간 이동
       youtubePlayerRef.current.contentWindow?.postMessage(
         JSON.stringify({
           event: 'command',
@@ -358,13 +426,18 @@ const App: React.FC = () => {
     }
   };
 
-  // MediaItem 클릭 핸들러
   const handleMediaItemClick = (media: MediaItem) => {
-    setSelectedMedia(media);
-    setMediaType(media.type);
-    setMediaUrl(media.url);
-    setDetectedObjects([]); // 이전 검색 결과 초기화
-    setTimeline([]); // 타임라인 초기화
+    if (media.type === 'image') {
+      setSelectedMedia(media);
+      setMediaType('image');
+      setMediaUrl(media.url);
+    } else {
+      setSelectedVideo(media);
+      setMediaType('video');
+      setMediaUrl(media.url);
+    }
+    setDetectedObjects([]);
+    setTimeline([]);
   };
 
   const handleSummarize = async () => {
@@ -413,14 +486,12 @@ const App: React.FC = () => {
       formData.append('session_id', sessionId);
       formData.append('message', chatMessage);
       
-      // 모든 이미지 파일 추가 (현재 선택된 이미지와 관계없이)
       const imageFiles = mediaItems
         .filter(item => item.type === 'image')
         .map(item => item.file);
       
       console.log('전송할 이미지 개수:', imageFiles.length);
       
-      // 모든 이미지 파일을 순서대로 추가하고 각 이미지의 타입 정보도 함께 전송
       imageFiles.forEach((file, index) => {
         const mediaItem = mediaItems.find(item => item.file === file);
         console.log(`이미지 ${index + 1} 추가:`, file.name, '타입:', mediaItem?.imageType);
@@ -448,7 +519,6 @@ const App: React.FC = () => {
       const data = await response.json();
       console.log('서버 응답:', data);
       
-      // 응답이 배열인 경우 각 이미지에 대한 설명을 순서대로 표시
       if (Array.isArray(data.summary)) {
         const formattedResponse = data.summary.map((summary: string, index: number) => {
           const mediaItem = mediaItems[index];
@@ -507,7 +577,6 @@ const App: React.FC = () => {
       return;
     }
 
-    // YouTube URL 형식 검증 및 변환
     let videoId = '';
     try {
       const url = new URL(youtubeUrl);
@@ -537,7 +606,7 @@ const App: React.FC = () => {
           url: youtubeUrl,
           video_id: videoId,
           query: '',
-          mode: 'normal'
+          mode: 'smart'
         })
       });
 
@@ -552,8 +621,17 @@ const App: React.FC = () => {
         throw new Error(data.error);
       }
 
-      // YouTube 비디오는 youtube-preview에만 표시
-      setSelectedMedia({
+      if (data.smart_search) {
+        setSmartSearchResult({
+          predicted_keywords: data.smart_search.predicted_keywords || [],
+          action_recommendations: data.smart_search.action_recommendations || [],
+          document_type: data.smart_search.document_type,
+          legal_updates: data.smart_search.legal_updates || [],
+          task_suggestions: data.smart_search.task_suggestions || []
+        });
+      }
+
+      setSelectedVideo({
         id: Date.now().toString(),
         type: 'video',
         url: videoId,
@@ -562,17 +640,14 @@ const App: React.FC = () => {
       });
       setYoutubeUrl('');
       
-      // 타임라인 설정
       if (data.timeline) {
         setTimeline(data.timeline);
       }
       
-      // OCR 텍스트 설정
       if (data.ocr_text) {
         setOcrText(data.ocr_text);
       }
       
-      // 세션 ID 설정
       if (data.session_id) {
         setSessionId(data.session_id);
       }
@@ -586,7 +661,6 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    // 3초 후에 로딩 화면을 숨깁니다
     const timer = setTimeout(() => {
       setIsLoading(false);
     }, 3000);
@@ -594,7 +668,6 @@ const App: React.FC = () => {
     return () => clearTimeout(timer);
   }, []);
 
-  // 페이지 변경 시 알림 상태 업데이트
   const handlePageChange = (newPage: number) => {
     setCurrentPage(newPage);
     if (searchResultPages.length > 0) {
@@ -618,7 +691,6 @@ const App: React.FC = () => {
       setSelectedMedia(prevMedia);
       setMediaType(prevMedia.type);
       setMediaUrl(prevMedia.url);
-      // 검색 결과는 유지
       if (prevMedia.imageType) {
         setSelectedImageType(prevMedia.imageType);
       }
@@ -632,7 +704,6 @@ const App: React.FC = () => {
       setSelectedMedia(nextMedia);
       setMediaType(nextMedia.type);
       setMediaUrl(nextMedia.url);
-      // 검색 결과는 유지
       if (nextMedia.imageType) {
         setSelectedImageType(nextMedia.imageType);
       }
@@ -692,30 +763,13 @@ const App: React.FC = () => {
 
         if (data.smart_search) {
             console.log('smart_search 데이터:', data.smart_search);
-            // 직접 상태 업데이트
-            const result = {
-                predicted_keywords: data.smart_search.predicted_keywords,
-                action_recommendations: data.smart_search.action_recommendations,
+            setSmartSearchResult({
+                predicted_keywords: data.smart_search.predicted_keywords || [],
+                action_recommendations: data.smart_search.action_recommendations || [],
                 document_type: data.smart_search.document_type,
-                legal_updates: data.smart_search.document_type === 'CONTRACT' ? [
-                    {
-                        title: '2024년 계약 관련 주요 개정사항',
-                        description: '근로계약 기간 변경 및 갱신요구권 관련 개정이 예정되어 있습니다.',
-                        source: '고용노동부',
-                        date: '2024-01-15'
-                    },
-                    {
-                        title: '임대차 계약 갱신요구권 변경',
-                        description: '2025년부터 임대차 계약의 갱신요구권 행사 횟수가 제한됩니다.',
-                        source: '국토교통부',
-                        date: '2024-02-01'
-                    }
-                ] : []
-            };
-            console.log('업데이트할 결과:', result);
-            setSmartSearchResult(result);
-        } else {
-            console.log('smart_search 데이터가 없습니다.');
+                legal_updates: data.smart_search.legal_updates || [],
+                task_suggestions: data.smart_search.task_suggestions || []
+            });
         }
     } catch (error) {
         console.error('스마트 검색 중 오류:', error);
@@ -725,7 +779,6 @@ const App: React.FC = () => {
     }
   };
 
-  // 이미지 크기 변경 감지 함수 추가
   const handleImageResize = () => {
     if (imageRef.current) {
       const rect = imageRef.current.getBoundingClientRect();
@@ -736,7 +789,6 @@ const App: React.FC = () => {
     }
   };
 
-  // 이미지 크기 변경 감지를 위한 useEffect 추가
   useEffect(() => {
     const resizeObserver = new ResizeObserver(handleImageResize);
     if (imageRef.current) {
@@ -755,16 +807,13 @@ const App: React.FC = () => {
     console.log('=== 액션 클릭 ===');
     console.log('선택된 액션:', action);
     
-    // action이 있으면 구글 검색으로 연결
     if (action.action) {
-      // "Search for" 텍스트 제거
       const searchQuery = action.action.replace(/^Search for ['"]?/, '').replace(/['"]?$/, '');
       const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}`;
       window.open(googleSearchUrl, '_blank');
       return;
     }
     
-    // action이 없는 경우 메시지만 표시
     alert(action.message);
   };
 
@@ -780,7 +829,6 @@ const App: React.FC = () => {
     e.preventDefault();
   };
 
-  // 모달 이미지 크기 변경 감지 함수
   const handleModalImageResize = () => {
     if (modalImageRef.current) {
       const rect = modalImageRef.current.getBoundingClientRect();
@@ -791,7 +839,6 @@ const App: React.FC = () => {
     }
   };
 
-  // 모달 이미지 크기 변경 감지를 위한 useEffect
   useEffect(() => {
     const resizeObserver = new ResizeObserver(handleModalImageResize);
     if (modalImageRef.current) {
@@ -816,7 +863,6 @@ const App: React.FC = () => {
         minHeight: '100vh'
       }}
     >
-      {/* 드래그 오버 시 표시될 오버레이 */}
       <div 
         className="drag-overlay"
         style={{
@@ -900,7 +946,7 @@ const App: React.FC = () => {
             </button>
             <button
               className="search-button smart-search"
-              onClick={handleSmartSearch}
+              onClick={() => handleSearch('smart')}
             >
               <div className="left-side">
                 <div className="magnifying-glass"></div>
@@ -947,116 +993,114 @@ const App: React.FC = () => {
                 minHeight: '0',
                 overflow: 'auto'
               }}>
-                <div className="image-wrapper">
-                  <div className="image-navigation">
-                    <div className="nav-button-container">
-                      <button 
-                        className="nav-button prev"
-                        onClick={handlePrevPage}
-                        disabled={currentPage === 0}
-                      >
-                        <i className="fas fa-chevron-left"></i>
-                      </button>
-                      {pageNotification.show && pageNotification.direction === 'prev' && (
-                        <div className="page-notification left">
-                          이전 페이지에 있는 결과에요!
-                        </div>
-                      )}
-                    </div>
-                    <div className="image-container" style={{ position: 'relative' }}>
-                      <img 
-                        src={mediaUrl} 
-                        alt="Selected" 
-                        ref={imageRef}
-                        className={detectedObjects.length > 0 ? 'has-results' : ''}
-                        onLoad={handleImageResize}
-                        style={{ maxHeight: 'calc(100vh - 300px)', objectFit: 'contain' }}
-                      />
-                      {detectedObjects.length > 0 && (
-                        <div className="preview-overlay">
-                          <button 
-                            className="view-results-button"
-                            onClick={() => setIsModalOpen(true)}
-                          >
-                            <i className="fas fa-search"></i>
-                            결과 보기
-                          </button>
-                        </div>
-                      )}
-                      {isAnalyzing && (
-                        <div className="analyzing-overlay">
-                          <div className="analyzing-content">
-                            <i className="fas fa-spinner fa-spin"></i>
-                            <span>이미지 분석 중...</span>
-                          </div>
-                        </div>
-                      )}
-                      {detectedObjects
-                        .filter(obj => obj.pageIndex === currentPage)
-                        .map((obj, index) => {
-                          if (!imageRef.current) return null;
-                          const imgElement = imageRef.current;
-                          const rect = imgElement.getBoundingClientRect();
-                          const bbox = obj.bbox;
-                          const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
-                          const scaleX = rect.width / imgElement.naturalWidth;
-                          const scaleY = rect.height / imgElement.naturalHeight;
-                          const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
-                          const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
-                          const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
-                          const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
-                          const lowerText = obj.text.toLowerCase();
-                          const lowerSearch = searchTerm.toLowerCase();
-                          const startIdx = lowerText.indexOf(lowerSearch);
-                          if (startIdx === -1) return null;
-                          const totalLen = obj.text.length;
-                          const searchLen = searchTerm.length;
-                          const charWidth = (x2 - x1) / totalLen;
-                          const wordX1 = x1 + charWidth * startIdx;
-                          const wordX2 = wordX1 + charWidth * searchLen;
-                          const centerX = (wordX1 + wordX2) / 2;
-                          const centerY = (y1 + y2) / 2;
-                          const textWidth = (wordX2 - wordX1) * scaleX;
-                          const textHeight = (y2 - y1) * scaleY;
-                          const radius = Math.max(textWidth, textHeight) * 0.5;
-                          const displayCenterX = centerX * scaleX;
-                          const displayCenterY = centerY * scaleY;
-                          return (
-                            <div
-                              key={index}
-                              style={{
-                                position: 'absolute',
-                                left: `${displayCenterX - radius}px`,
-                                top: `${displayCenterY - radius}px`,
-                                width: `${radius * 2}px`,
-                                height: `${radius * 2}px`,
-                                border: `2px solid red`,
-                                borderRadius: '50%',
-                                pointerEvents: 'none',
-                                zIndex: 1,
-                              }}
-                            />
-                          );
-                        })}
-                    </div>
-                    <div className="nav-button-container">
-                      <button 
-                        className="nav-button next"
-                        onClick={handleNextPage}
-                        disabled={currentPage === mediaItems.length - 1}
-                      >
-                        <i className="fas fa-chevron-right"></i>
-                      </button>
-                      {pageNotification.show && pageNotification.direction === 'next' && (
-                        <div className="page-notification right">
-                          다음 페이지에 있는 결과에요!
-                        </div>
-                      )}
-                    </div>
+                <div className="image-navigation">
+                  <div className="nav-button-container">
+                    <button 
+                      className="nav-button prev"
+                      onClick={handlePrevPage}
+                      disabled={currentPage === 0}
+                    >
+                      <i className="fas fa-chevron-left"></i>
+                    </button>
+                    {pageNotification.show && pageNotification.direction === 'prev' && (
+                      <div className="page-notification left">
+                        이전 페이지에 있는 결과에요!
+                      </div>
+                    )}
                   </div>
-                  <div className="page-indicator">
-                    {currentPage + 1} / {mediaItems.length}
+                  <div className="image-container" style={{ position: 'relative' }}>
+                    <img 
+                      src={mediaUrl} 
+                      alt="Selected" 
+                      ref={imageRef}
+                      className={detectedObjects.length > 0 ? 'has-results' : ''}
+                      onLoad={handleImageResize}
+                      style={{ maxHeight: 'calc(100vh - 300px)', objectFit: 'contain' }}
+                    />
+                    {detectedObjects.length > 0 && (
+                      <div className="preview-overlay">
+                        <button 
+                          className="view-results-button"
+                          onClick={() => setIsModalOpen(true)}
+                        >
+                          <i className="fas fa-search"></i>
+                          결과 보기
+                        </button>
+                      </div>
+                    )}
+                    {isAnalyzing && (
+                      <div className="analyzing-overlay">
+                        <div className="analyzing-content">
+                          <i className="fas fa-spinner fa-spin"></i>
+                          <span>이미지 분석 중...</span>
+                        </div>
+                      </div>
+                    )}
+                    {detectedObjects
+                      .filter(obj => obj.pageIndex === currentPage)
+                      .map((obj, index) => {
+                        if (!imageRef.current) return null;
+                        const imgElement = imageRef.current;
+                        const rect = imgElement.getBoundingClientRect();
+                        const bbox = obj.bbox;
+                        const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
+                        const scaleX = rect.width / imgElement.naturalWidth;
+                        const scaleY = rect.height / imgElement.naturalHeight;
+                        const x1 = isNormalized ? bbox.x1 * imgElement.naturalWidth : bbox.x1;
+                        const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
+                        const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
+                        const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
+                        const lowerText = obj.text.toLowerCase();
+                        const lowerSearch = searchTerm.toLowerCase();
+                        const startIdx = lowerText.indexOf(lowerSearch);
+                        if (startIdx === -1) return null;
+                        const totalLen = obj.text.length;
+                        const searchLen = searchTerm.length;
+                        const charWidth = (x2 - x1) / totalLen;
+                        const wordX1 = x1 + charWidth * startIdx;
+                        const wordX2 = wordX1 + charWidth * searchLen;
+                        const centerX = (wordX1 + wordX2) / 2;
+                        const centerY = (y1 + y2) / 2;
+                        const textWidth = (wordX2 - wordX1) * scaleX;
+                        const textHeight = (y2 - y1) * scaleY;
+                        const radius = Math.max(textWidth, textHeight) * 0.5;
+                        const displayCenterX = centerX * scaleX;
+                        const displayCenterY = centerY * scaleY;
+                        return (
+                          <div
+                            key={index}
+                            style={{
+                              position: 'absolute',
+                              left: `${displayCenterX - radius}px`,
+                              top: `${displayCenterY - radius}px`,
+                              width: `${radius * 2}px`,
+                              height: `${radius * 2}px`,
+                              border: `2px solid red`,
+                              borderRadius: '50%',
+                              pointerEvents: 'none',
+                              zIndex: 1,
+                            }}
+                          />
+                        );
+                      })}
                   </div>
+                  <div className="nav-button-container">
+                    <button 
+                      className="nav-button next"
+                      onClick={handleNextPage}
+                      disabled={currentPage === mediaItems.length - 1}
+                    >
+                      <i className="fas fa-chevron-right"></i>
+                    </button>
+                    {pageNotification.show && pageNotification.direction === 'next' && (
+                      <div className="page-notification right">
+                        다음 페이지에 있는 결과에요!
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="page-indicator">
+                  {currentPage + 1} / {mediaItems.length}
                 </div>
               </div>
             ) : (
@@ -1090,11 +1134,7 @@ const App: React.FC = () => {
                       overflow: 'hidden'
                     }}
                   >
-                    {media.type === 'video' ? (
-                      <video src={media.url} className="media-preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    ) : (
-                      <img src={media.url} alt="Uploaded" className="media-preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    )}
+                    <img src={media.url} alt="Uploaded" className="media-preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   </div>
                 ))}
               </div>
@@ -1126,72 +1166,66 @@ const App: React.FC = () => {
             )}
           </div>
 
-          <div style={{ padding: '20px', backgroundColor: '#f8f9fa', borderRadius: '8px', marginTop: '20px' }}>
-            {smartSearchResult ? (
-              <>
-                <h3 style={{ marginBottom: '15px', color: '#333' }}>스마트 검색 결과</h3>
-                <div style={{ marginBottom: '15px' }}>
-                  <strong>문서 유형:</strong> {smartSearchResult.document_type === 'CONTRACT' ? '계약서' : 
-                    smartSearchResult.document_type === 'PAPER' ? '논문' : '기타'}
-                </div>
-                <div style={{ marginBottom: '15px' }}>
-                  <strong>예측된 키워드:</strong> {smartSearchResult.predicted_keywords.join(', ')}
-                </div>
-                {smartSearchResult.document_type === 'CONTRACT' && smartSearchResult.legal_updates && (
-                  <div style={{ marginBottom: '20px' }}>
-                    <h4 style={{ color: '#333', marginBottom: '10px' }}>관련 법령/개정 이슈</h4>
-                    {smartSearchResult.legal_updates.map((update, index) => (
-                      <div key={index} style={{ 
-                        marginBottom: '15px', 
-                        padding: '15px', 
-                        backgroundColor: '#fff', 
-                        borderRadius: '8px',
-                        border: '1px solid #e0e0e0'
-                      }}>
-                        <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>{update.title}</div>
-                        <div style={{ marginBottom: '5px' }}>{update.description}</div>
-                        <div style={{ fontSize: '0.9em', color: '#666' }}>
-                          출처: {update.source} ({update.date})
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div>
-                  <strong>추천 액션:</strong>
-                  {smartSearchResult.action_recommendations.map((action, index) => (
-                    <button
-                      key={index}
-                      onClick={() => handleActionClick(action)}
-                      style={{
-                        width: '100%',
-                        marginTop: '10px',
-                        padding: '10px',
-                        backgroundColor: '#fff',
+          <div className="task-suggestions-section" style={{ 
+            padding: '20px', 
+            backgroundColor: '#f8f9fa', 
+            borderRadius: '8px', 
+            marginTop: '20px' 
+          }}>
+            <h3 style={{ marginBottom: '15px', color: '#333' }}>
+              {isTaskSuggesting ? '태스크 제안 생성 중...' : '태스크 제안'}
+            </h3>
+            
+            {isTaskSuggesting ? (
+              <div style={{ textAlign: 'center', padding: '20px' }}>
+                <i className="fas fa-spinner fa-spin" style={{ fontSize: '24px', color: '#007bff' }}></i>
+                <p style={{ marginTop: '10px', color: '#666' }}>태스크를 생성하고 있습니다...</p>
+              </div>
+            ) : taskSuggestions.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {taskSuggestions.map((task, index) => (
+                  <div
+                    key={index}
+                    style={{
+                      padding: '15px',
+                      backgroundColor: '#fff',
+                      borderRadius: '8px',
+                      border: '1px solid #e0e0e0',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                    }}
+                  >
+                    <div style={{ 
+                      display: 'flex', 
+                      justifyContent: 'space-between', 
+                      alignItems: 'center',
+                      marginBottom: '8px'
+                    }}>
+                      <h4 style={{ margin: 0, color: '#333' }}>{task.task}</h4>
+                      <span style={{
+                        padding: '4px 8px',
                         borderRadius: '4px',
-                        border: '1px solid #ddd',
-                        textAlign: 'left',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease',
-                        display: 'block'
-                      }}
-                      onMouseOver={(e) => {
-                        e.currentTarget.style.backgroundColor = '#f0f0f0';
-                        e.currentTarget.style.transform = 'translateY(-2px)';
-                      }}
-                      onMouseOut={(e) => {
-                        e.currentTarget.style.backgroundColor = '#fff';
-                        e.currentTarget.style.transform = 'translateY(0)';
-                      }}
-                    >
-                      {index + 1}. {action.message}
-                    </button>
-                  ))}
-                </div>
-              </>
+                        fontSize: '0.8em',
+                        backgroundColor: 
+                          task.priority === 'high' ? '#ffebee' :
+                          task.priority === 'medium' ? '#fff3e0' :
+                          '#e8f5e9',
+                        color: 
+                          task.priority === 'high' ? '#c62828' :
+                          task.priority === 'medium' ? '#ef6c00' :
+                          '#2e7d32'
+                      }}>
+                        {task.priority === 'high' ? '높음' :
+                         task.priority === 'medium' ? '중간' :
+                         '낮음'}
+                      </span>
+                    </div>
+                    <p style={{ margin: 0, color: '#666' }}>{task.description}</p>
+                  </div>
+                ))}
+              </div>
             ) : (
               <div style={{ textAlign: 'center', color: '#666' }}>
-                스마트 검색 결과가 여기에 표시됩니다
+                이미지를 업로드하면 태스크 제안이 여기에 표시됩니다
               </div>
             )}
           </div>
@@ -1199,12 +1233,18 @@ const App: React.FC = () => {
 
         <div className="youtube-input-container">
           <div className="youtube-preview">
-            {selectedMedia && selectedMedia.type === 'video' ? (
+            {selectedVideo && selectedVideo.type === 'video' && selectedVideo.url.startsWith('blob:') ? (
+              <video
+                src={selectedVideo.url}
+                controls
+                style={{ width: '100%', height: '100%' }}
+              />
+            ) : selectedVideo && selectedVideo.type === 'video' ? (
               <iframe
                 ref={youtubePlayerRef}
                 width="100%"
                 height="100%"
-                src={`https://www.youtube.com/embed/${selectedMedia.url}?enablejsapi=1`}
+                src={`https://www.youtube.com/embed/${selectedVideo.url}?enablejsapi=1`}
                 title="YouTube video player"
                 frameBorder="0"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -1238,6 +1278,36 @@ const App: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* 비디오 그리드 */}
+        {videoItems.length > 0 && (
+          <div className="video-grid" style={{
+            marginTop: '20px',
+            display: 'flex',
+            justifyContent: 'center',
+            gap: '10px',
+            flexWrap: 'wrap',
+            width: '100%'
+          }}>
+            {videoItems.map(media => (
+              <div
+                key={media.id}
+                className={`media-item ${selectedVideo?.id === media.id ? 'selected' : ''}`}
+                onClick={() => handleMediaItemClick(media)}
+                style={{
+                  width: '100px',
+                  height: '100px',
+                  cursor: 'pointer',
+                  border: selectedVideo?.id === media.id ? '2px solid #007bff' : '1px solid #ddd',
+                  borderRadius: '4px',
+                  overflow: 'hidden'
+                }}
+              >
+                <video src={media.url} className="media-preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              </div>
+            ))}
+          </div>
+        )}
 
         {noResults && (
           <div className="no-results-message">
@@ -1293,7 +1363,6 @@ const App: React.FC = () => {
         )}
       </div>
 
-      {/* 이미지 확대 보기 모달 */}
       {isModalOpen && (
         <div 
           className="modal-overlay"
@@ -1399,4 +1468,4 @@ const App: React.FC = () => {
   );
 };
 
-export default App; // 테스트 주석
+export default App;

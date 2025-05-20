@@ -1,0 +1,134 @@
+<div class="container">
+    <div class="upload-section">
+        <h2>이미지/영상 업로드</h2>
+        <form id="upload-form" enctype="multipart/form-data">
+            <input type="file" id="image-input" accept="image/*,video/*" multiple>
+            <button type="submit">분석하기</button>
+        </form>
+    </div>
+
+    <div class="media-holder">
+        <div id="media-container" class="media-container"></div>
+    </div>
+
+    <div class="youtube-input-container">
+        <div class="youtube-preview">
+            <div class="youtube-placeholder">
+                <i class="fab fa-youtube"></i>
+                <p>YouTube 링크를 업로드하세요</p>
+            </div>
+        </div>
+        <div class="youtube-controls">
+            <h3>YouTube URL</h3>
+            <div class="youtube-input-container">
+                <input type="text" id="youtube-url" placeholder="YouTube URL을 입력하세요" class="youtube-input">
+                <button id="process-youtube" class="youtube-button">
+                    <i class="fab fa-youtube"></i>
+                    분석하기
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="results-section">
+        <div class="ocr-results">
+            <h2>OCR 결과</h2>
+            <div id="ocr-results-container"></div>
+        </div>
+
+        <div class="task-suggestions">
+            <h2>태스크 제안</h2>
+            <div id="task-suggestions"></div>
+        </div>
+
+        <div class="search-section">
+            <h2>검색</h2>
+            <input type="text" id="search-input" placeholder="검색어를 입력하세요">
+            <button id="search-button">검색</button>
+            <div id="search-results"></div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+
+    .upload-section {
+        margin-bottom: 30px;
+    }
+
+    .media-holder {
+        margin-bottom: 30px;
+        background: #f5f5f5;
+        padding: 20px;
+        border-radius: 8px;
+    }
+
+    #media-container {
+        width: 100%;
+        max-width: 800px;
+        margin: 0 auto;
+    }
+
+    #media-container video {
+        width: 100%;
+        height: auto;
+        border-radius: 4px;
+    }
+
+    .results-section {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+    }
+
+    .ocr-results, .task-suggestions, .search-section {
+        background: #f5f5f5;
+        padding: 20px;
+        border-radius: 8px;
+    }
+
+    .task-suggestions {
+        grid-column: 1 / -1;
+    }
+
+    .suggestions-list {
+        list-style: none;
+        padding: 0;
+    }
+
+    .suggestion-item {
+        background: white;
+        padding: 15px;
+        margin-bottom: 10px;
+        border-radius: 4px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .suggestion-item h3 {
+        margin: 0 0 10px 0;
+        color: #333;
+    }
+
+    .suggestion-item p {
+        margin: 0 0 15px 0;
+        color: #666;
+    }
+
+    .add-task-btn {
+        background: #4CAF50;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+
+    .add-task-btn:hover {
+        background: #45a049;
+    }
+</style> 

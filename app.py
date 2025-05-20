@@ -1108,47 +1108,248 @@ def get_smart_search_predictions(query: str, context: str) -> dict:
             ]
         }
 
+def get_task_suggestions(text: str) -> list:
+    """OCR 텍스트를 기반으로 태스크 제안을 생성합니다."""
+    try:
+        # 텍스트가 너무 길 경우 잘라내기
+        max_text_length = 4000  # GPT-4의 컨텍스트 제한을 고려
+        if len(text) > max_text_length:
+            text = text[:max_text_length] + "..."
+        
+        prompt = f"""
+        다음은 OCR로 추출된 텍스트입니다. 각 이미지의 텍스트는 '=== 이미지 N ===' 형식으로 구분되어 있습니다:
+        {text}
+        
+        이 텍스트들을 바탕으로 수행해야 할 태스크들을 제안해주세요.
+        각 태스크는 다음 형식으로 작성해주세요:
+        - task: 태스크 제목
+        - description: 태스크 설명
+        - priority: 'high', 'medium', 'low' 중 하나
+        
+        JSON 형식으로 응답해주세요:
+        {{
+            "suggestions": [
+                {{
+                    "task": "태스크 제목",
+                    "description": "태스크 설명",
+                    "priority": "high/medium/low"
+                }}
+            ]
+        }}
+        
+        주의사항:
+        1. 각 이미지의 텍스트를 개별적으로 분석하고, 연관된 태스크를 제안하세요.
+        2. 이미지 간의 연관성이 없더라도 각각의 태스크를 제안하세요.
+        3. 반드시 유효한 JSON 형식을 지켜주세요.
+        """
+        
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that suggests tasks based on OCR text. Always respond in valid JSON format."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        # 응답 텍스트에서 JSON 부분만 추출
+        response_text = response.choices[0].message.content.strip()
+        try:
+            # JSON 파싱 시도
+            result = json.loads(response_text)
+            suggestions = result.get('suggestions', [])
+            print(f"태스크 제안 결과: {suggestions}")
+            return suggestions
+        except json.JSONDecodeError as e:
+            print(f"JSON 파싱 오류: {e}")
+            print(f"원본 응답: {response_text}")
+            # 기본 태스크 제안 반환
+            return [{
+                "task": "텍스트 분석",
+                "description": "OCR로 추출된 텍스트를 분석하여 필요한 작업을 파악하세요.",
+                "priority": "high"
+            }]
+            
+    except Exception as e:
+        print(f"Error in task suggestion: {e}")
+        # 오류 발생 시 기본 태스크 제안 반환
+        return [{
+            "task": "텍스트 분석",
+            "description": "OCR로 추출된 텍스트를 분석하여 필요한 작업을 파악하세요.",
+            "priority": "high"
+        }]
+
 @app.route('/analyze-image', methods=['POST'])
 def analyze_image():
     try:
+        print("\n=== analyze-image 요청 시작 ===")
+        print(f"Content-Type: {request.content_type}")
+        print(f"Files: {request.files}")
+        print(f"Form data: {request.form}")
+        
+        # JSON 데이터 처리
+        if request.is_json:
+            print("JSON 요청 처리")
+            data = request.get_json()
+            text = data.get('text')
+            type = data.get('type')
+            session_id = data.get('session_id')
+            
+            if type == 'task_suggestion' and text:
+                print(f"태스크 제안 요청 - 세션 ID: {session_id}")
+                # 세션에 저장된 이전 OCR 결과와 새로운 텍스트 결합
+                if session_id and session_id in ocr_results_cache:
+                    previous_text = ocr_results_cache[session_id].get('text', '')
+                    combined_text = f"{previous_text}\n=== 새 이미지 ===\n{text}" if previous_text else text
+                else:
+                    combined_text = text
+                
+                # 새로운 태스크 제안 생성
+                new_suggestions = get_task_suggestions(combined_text)
+                
+                # 세션에 태스크 제안 저장
+                if session_id not in ocr_results_cache:
+                    ocr_results_cache[session_id] = {
+                        'text': '',
+                        'coordinates': {},
+                        'images': [],
+                        'task_suggestions': []
+                    }
+                ocr_results_cache[session_id]['task_suggestions'] = new_suggestions
+                
+                return jsonify({
+                    'suggestions': new_suggestions,
+                    'session_id': session_id,
+                    'total_images': len(ocr_results_cache[session_id]['images']) if session_id in ocr_results_cache else 0
+                })
+        
+        # 기존 FormData 처리
         session_id = request.form.get('session_id')
         query = request.form.get('query')
         mode = request.form.get('mode', 'normal')
         files = request.files.getlist('images[]')
         
-        if not files or not query:
-            return jsonify({'error': '이미지와 검색어가 필요합니다'}), 400
+        print(f"세션 ID: {session_id}")
+        print(f"검색어: {query}")
+        print(f"모드: {mode}")
+        print(f"파일 수: {len(files)}")
+        
+        if not files:
+            return jsonify({'error': '이미지 파일이 필요합니다'}), 400
             
+        # 세션 초기화 또는 가져오기
+        if session_id not in ocr_results_cache:
+            ocr_results_cache[session_id] = {
+                'text': '',
+                'coordinates': {},
+                'images': [],
+                'task_suggestions': []
+            }
+        
         # OCR 처리
-        ocr_results = []
+        all_ocr_results = []
+        all_text_blocks = []
+        
         for file in files:
-            temp_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_image.jpg')
-            file.save(temp_path)
-            text_blocks = extract_text_with_vision(temp_path)
-            if text_blocks:
-                ocr_results.extend(text_blocks)
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            
-        # 검색어 매칭
+            try:
+                print(f"\n이미지 처리 시작: {file.filename}")
+                temp_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_image.jpg')
+                file.save(temp_path)
+                
+                # OCR 실행
+                text_blocks = extract_text_with_vision(temp_path)
+                print(f"OCR 결과: {len(text_blocks)}개의 텍스트 블록 발견")
+                
+                if text_blocks:
+                    all_text_blocks.extend(text_blocks)
+                    # 각 이미지의 OCR 결과를 개별적으로 저장
+                    image_result = {
+                        'filename': file.filename,
+                        'text_blocks': text_blocks
+                    }
+                    all_ocr_results.append(image_result)
+                    
+                    # 세션에 이미지 정보 추가
+                    ocr_results_cache[session_id]['images'].append({
+                        'filename': file.filename,
+                        'text_blocks': text_blocks
+                    })
+                    
+                    # 세션의 전체 텍스트 업데이트
+                    new_text = "\n".join([block['text'] for block in text_blocks])
+                    if ocr_results_cache[session_id]['text']:
+                        ocr_results_cache[session_id]['text'] += f"\n=== 새 이미지 ===\n{new_text}"
+                    else:
+                        ocr_results_cache[session_id]['text'] = new_text
+                
+                print(f"이미지 처리 완료: {file.filename}")
+                
+            except Exception as e:
+                print(f"이미지 처리 중 오류 발생: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
+                continue
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+        
+        print(f"\n총 처리된 이미지 수: {len(all_ocr_results)}")
+        print(f"총 텍스트 블록 수: {len(all_text_blocks)}")
+        
+        # 검색어가 있는 경우 매칭 처리
         matches = []
-        for result in ocr_results:
-            if query.lower() in result['text'].lower():
-                matches.append(result)
+        if query:
+            print(f"\n검색어 '{query}'로 매칭 시작")
+            # 세션의 모든 텍스트 블록에서 검색
+            all_session_blocks = []
+            for image in ocr_results_cache[session_id]['images']:
+                all_session_blocks.extend(image['text_blocks'])
             
-        # 스마트 검색 모드인 경우 GPT 예측 추가
-        smart_search = None
-        if mode == 'smart':
-            context = " ".join([result['text'] for result in ocr_results])
-            smart_search = get_smart_search_predictions(query, context)
+            for block in all_session_blocks:
+                if query.lower() in block['text'].lower():
+                    matches.append({
+                        'text': block['text'],
+                        'bbox': block['bbox'],
+                        'confidence': block.get('confidence', 1.0)
+                    })
             
-        return jsonify({
-            'matches': matches,
-            'smart_search': smart_search,
-            'session_id': session_id
-        })
+            print(f"매칭된 결과 수: {len(matches)}")
+            
+            # 스마트 검색 모드인 경우 GPT 예측 추가
+            smart_search = None
+            if mode == 'smart':
+                context = ocr_results_cache[session_id]['text']
+                smart_search = get_smart_search_predictions(query, context)
+            
+            return jsonify({
+                'matches': matches,
+                'smart_search': smart_search,
+                'session_id': session_id
+            })
+        else:
+            # 검색어가 없는 경우 (태스크 제안 모드)
+            print("\n태스크 제안 모드")
+            # 세션의 전체 텍스트 사용하여 새로운 태스크 제안 생성
+            combined_text = ocr_results_cache[session_id]['text']
+            new_suggestions = get_task_suggestions(combined_text)
+            
+            # 세션의 태스크 제안 업데이트
+            ocr_results_cache[session_id]['task_suggestions'] = new_suggestions
+            
+            print(f"생성된 태스크 제안 수: {len(new_suggestions)}")
+            
+            return jsonify({
+                'suggestions': new_suggestions,
+                'session_id': session_id,
+                'ocr_results': all_ocr_results,
+                'total_images': len(ocr_results_cache[session_id]['images'])
+            })
         
     except Exception as e:
+        print(f"Error in analyze_image: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/uploads/<filename>')
