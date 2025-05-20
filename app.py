@@ -735,9 +735,10 @@ def extract_frames_from_video(video_path, interval=2.0, max_frames=None):
     cap.release()
     return frames, timestamps
 
-def process_video(video_path, query, mode='normal'):
+def process_video(video_path, query, mode='normal', session_id=None):
     """비디오 처리 및 타임라인 생성"""
     print(f"비디오 처리 시작: {video_path}")
+    print(f"세션 ID: {session_id}")
     
     # 비디오 정보 가져오기
     cap = cv2.VideoCapture(video_path)
@@ -846,6 +847,30 @@ def process_video(video_path, query, mode='normal'):
     # 전체 OCR 텍스트를 하나의 문자열로 결합
     ocr_text = '\n'.join(all_ocr_text)
     print(f"=== 전체 OCR 텍스트 ===\n{ocr_text}")
+    
+    # 세션에 타임라인 결과 저장
+    if session_id and session_id in ocr_results_cache:
+        if 'videos' not in ocr_results_cache[session_id]:
+            ocr_results_cache[session_id]['videos'] = []
+        
+        # 현재 비디오의 타임라인 결과 저장
+        video_filename = os.path.basename(video_path)
+        video_info = {
+            'filename': video_filename,
+            'file_url': f'/uploads/{video_filename}',
+            'timeline': timeline_results
+        }
+        
+        # 기존 비디오 정보 업데이트 또는 새로 추가
+        video_exists = False
+        for i, video in enumerate(ocr_results_cache[session_id]['videos']):
+            if video['filename'] == video_filename:
+                ocr_results_cache[session_id]['videos'][i] = video_info
+                video_exists = True
+                break
+        
+        if not video_exists:
+            ocr_results_cache[session_id]['videos'].append(video_info)
     
     return timeline_results
 

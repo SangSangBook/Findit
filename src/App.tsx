@@ -424,75 +424,35 @@ const App: React.FC = () => {
       }
       
       if (data.detected_objects && data.detected_objects.length > 0) {
-        console.log('=== 객체 매칭 시작 ===');
-        console.log('감지된 객체들:', data.detected_objects);
-        console.log('검색어:', searchTerm);
-        
         const objectResults = data.detected_objects
           .filter((obj: any) => {
             const objectName = (obj.name || obj.text || '').toLowerCase();
             const searchTermLower = searchTerm.toLowerCase();
             
-            console.log('=== 현재 객체 매칭 시도 ===');
-            console.log('객체 정보:', {
-              originalName: obj.name || obj.text,
-              lowerName: objectName,
-              searchTerm: searchTermLower,
-              bbox: obj.bbox,
-              confidence: obj.confidence
-            });
-            
             const directMatch = objectName.includes(searchTermLower) || searchTermLower.includes(objectName);
-            console.log('직접 매칭 결과:', directMatch);
-            
             const koreanMatches = koreanToEnglish[searchTermLower] || [];
             const englishMatches = englishToKorean[objectName] || [];
             
-            console.log('매핑 정보:', {
-              koreanMatches,
-              englishMatches,
-              koreanToEnglish: koreanToEnglish[searchTermLower],
-              englishToKorean: englishToKorean[objectName]
-            });
-            
             const mappedMatch = koreanMatches.some(english => {
               const match = objectName.includes(english.toLowerCase());
-              console.log(`매핑 시도: ${english} -> ${objectName} = ${match}`);
               return match;
             }) || englishMatches.some(korean => {
               const match = searchTermLower.includes(korean);
-              console.log(`매핑 시도: ${korean} -> ${searchTermLower} = ${match}`);
               return match;
             });
-            console.log('매핑 매칭 결과:', mappedMatch);
 
             const isKoreanSearch = /[가-힣]/.test(searchTerm);
             const koreanObjectMatch = isKoreanSearch && objectName.includes(searchTermLower);
-            console.log('한글 매칭 결과:', { isKoreanSearch, koreanObjectMatch });
             
             const isEnglishSearch = /[a-zA-Z]/.test(searchTerm);
             const englishObjectMatch = isEnglishSearch && objectName.includes(searchTermLower);
-            console.log('영어 매칭 결과:', { isEnglishSearch, englishObjectMatch });
             
             const additionalMappedMatch = isKoreanSearch && koreanMatches.some(english => {
               const match = objectName.includes(english.toLowerCase());
-              console.log(`추가 매핑 시도: ${english} -> ${objectName} = ${match}`);
               return match;
             });
-            console.log('추가 매핑 매칭 결과:', additionalMappedMatch);
             
-            const isMatch = directMatch || mappedMatch || koreanObjectMatch || englishObjectMatch || additionalMappedMatch;
-            
-            console.log('최종 매칭 결과:', {
-              directMatch,
-              mappedMatch,
-              koreanObjectMatch,
-              englishObjectMatch,
-              additionalMappedMatch,
-              isMatch
-            });
-            
-            return isMatch;
+            return directMatch || mappedMatch || koreanObjectMatch || englishObjectMatch || additionalMappedMatch;
           })
           .map((obj: any) => ({
             text: obj.name || obj.text,
@@ -544,32 +504,24 @@ const App: React.FC = () => {
     const newSearchTerm = e.target.value;
     setSearchTerm(newSearchTerm);
     
+    // 타임라인이 있을 때만 하이라이트 처리
+    if (timeline.length > 0) {
+      const updatedTimeline = timeline.map(item => ({
+        ...item,
+        texts: item.texts.map(text => ({
+          ...text,
+          color: newSearchTerm ? 
+            (text.text.toLowerCase().includes(newSearchTerm.toLowerCase()) ? '#007bff' : '#000000') 
+            : '#000000'
+        }))
+      }));
+      setTimeline(updatedTimeline);
+    }
+
+    // 검색어가 비어있을 때 검색 결과 초기화
     if (newSearchTerm === '') {
       setDetectedObjects([]);
       setNoResults(false);
-      // 검색어가 비어있을 때 타임라인 하이라이트 제거
-      if (timeline.length > 0) {
-        const resetTimeline = timeline.map(item => ({
-          ...item,
-          texts: item.texts.map(text => ({
-            ...text,
-            color: undefined
-          }))
-        }));
-        setTimeline(resetTimeline);
-      }
-    } else {
-      // 검색어가 있을 때 타임라인 하이라이트
-      if (timeline.length > 0) {
-        const updatedTimeline = timeline.map(item => ({
-          ...item,
-          texts: item.texts.map(text => ({
-            ...text,
-            color: text.text.toLowerCase().includes(newSearchTerm.toLowerCase()) ? '#007bff' : undefined
-          }))
-        }));
-        setTimeline(updatedTimeline);
-      }
     }
   };
 
@@ -1557,7 +1509,11 @@ const App: React.FC = () => {
                     </div>
                     <div className="texts">
                       {item.texts.map((text, textIndex) => (
-                        <div key={textIndex} className="text-item">
+                        <div 
+                          key={textIndex} 
+                          className="text-item"
+                          style={{ color: text.color || 'inherit' }}
+                        >
                           {text.text}
                         </div>
                       ))}
