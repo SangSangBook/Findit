@@ -623,6 +623,11 @@ const App: React.FC = () => {
           formData.append(`image_types[${index}]`, mediaItem.imageType);
         }
       });
+
+      // OCR 텍스트가 있다면 추가
+      if (ocrText) {
+        formData.append('ocr_text', ocrText);
+      }
       
       console.log('FormData 내용:');
       Array.from(formData.entries()).forEach(([key, value]) => {
@@ -642,19 +647,65 @@ const App: React.FC = () => {
       const data = await response.json();
       console.log('서버 응답:', data);
       
+      if (data.error) {
+        // 객체 감지 에러가 발생했을 때 OCR 텍스트로 재시도
+        if (ocrText) {
+          const ocrFormData = new FormData();
+          ocrFormData.append('session_id', sessionId);
+          ocrFormData.append('message', chatMessage);
+          ocrFormData.append('ocr_text', ocrText);
+          ocrFormData.append('use_ocr_only', 'true');
+
+          const ocrResponse = await fetch('http://localhost:5001/summarize', {
+            method: 'POST',
+            body: ocrFormData
+          });
+
+          if (!ocrResponse.ok) {
+            throw new Error('분석 중 오류가 발생했습니다.');
+          }
+
+          const ocrData = await ocrResponse.json();
+          // 시스템 메시지 제거하고 핵심 내용만 표시
+          const cleanResponse = ocrData.summary
+            .replace(/^.*?프로젝트 참여 팀원은 다음과 같습니다:\s*/g, '')
+            .replace(/^.*?OCR 텍스트를 통해.*?정보를 확인할 수 있습니다\.\s*/g, '')
+            .replace(/^.*?죄송합니다.*?감지되지 않았습니다\.\s*/g, '')
+            .replace(/^.*?이미지에서 객체가 감지되지 않았습니다\.\s*/g, '')
+            .trim();
+          setChatResponse(cleanResponse);
+          return;
+        }
+        throw new Error('분석 중 오류가 발생했습니다.');
+      }
+      
       if (Array.isArray(data.summary)) {
         const formattedResponse = data.summary.map((summary: string, index: number) => {
           const mediaItem = mediaItems[index];
           const imageType = mediaItem?.imageType || '알 수 없음';
-          return `${index + 1}번째 이미지 (${imageType}):\n${summary}\n`;
+          // 시스템 메시지 제거하고 핵심 내용만 표시
+          const cleanSummary = summary
+            .replace(/^.*?프로젝트 참여 팀원은 다음과 같습니다:\s*/g, '')
+            .replace(/^.*?OCR 텍스트를 통해.*?정보를 확인할 수 있습니다\.\s*/g, '')
+            .replace(/^.*?죄송합니다.*?감지되지 않았습니다\.\s*/g, '')
+            .replace(/^.*?이미지에서 객체가 감지되지 않았습니다\.\s*/g, '')
+            .trim();
+          return `${index + 1}번째 이미지 (${imageType}):\n${cleanSummary}\n`;
         }).join('\n');
         setChatResponse(formattedResponse);
       } else {
-        setChatResponse(data.summary);
+        // 시스템 메시지 제거하고 핵심 내용만 표시
+        const cleanResponse = data.summary
+          .replace(/^.*?프로젝트 참여 팀원은 다음과 같습니다:\s*/g, '')
+          .replace(/^.*?OCR 텍스트를 통해.*?정보를 확인할 수 있습니다\.\s*/g, '')
+          .replace(/^.*?죄송합니다.*?감지되지 않았습니다\.\s*/g, '')
+          .replace(/^.*?이미지에서 객체가 감지되지 않았습니다\.\s*/g, '')
+          .trim();
+        setChatResponse(cleanResponse);
       }
     } catch (error) {
       console.error('채팅 처리 중 오류:', error);
-      alert('채팅 처리 중 오류가 발생했습니다.');
+      alert('분석 중 오류가 발생했습니다.');
     }
   };
 
@@ -1095,7 +1146,19 @@ const App: React.FC = () => {
 
       <div className="left-section">
         <div className="app-logo">Findit!</div>
-        <div className="app-subtitle">미디어에서{'\n'}정보를{'\n'}찾아주세요</div>
+        <div className="app-subtitle">
+          미디어에서{'\n'}
+          정보를{'\n'}
+          찾아보세요
+          <span style={{
+            display: 'inline-block',
+            width: '10px',
+            height: '10px',
+            backgroundColor: '#46B876',
+            borderRadius: '70%',
+            marginLeft: '10px',
+          }}></span>
+        </div>
         <div className="upload-section">
           <div className="upload-options">
             <button
@@ -1360,8 +1423,9 @@ const App: React.FC = () => {
               borderRadius: '8px',
               zIndex: 9999,
               cursor: 'move',
+              textAlign: 'left',
               boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
-              width: '300px',
+              width: '500px',
               maxHeight: '400px',
               overflowY: 'auto'
             }}>
@@ -1422,7 +1486,7 @@ const App: React.FC = () => {
                 ))}
               </div>
             ) : (
-              <div style={{ textAlign: 'center', color: '#666' }}>
+              <div style={{ color: '#666' }}>
                 한 번의 업로드, 수많은 가능성의 제안.
               </div>
             )}
@@ -1434,6 +1498,22 @@ const App: React.FC = () => {
             <i className="fas fa-search"></i>
             <p>검색 결과가 없습니다.</p>
             <p className="sub-text">다른 검색어를 입력하거나 OCR을 새로고침해보세요.</p>
+          </div>
+        )}
+
+        {summary && (
+          <div className="summary-container" style={{
+            margin: '20px 0',
+            padding: '20px',
+            backgroundColor: '#f8f9fa',
+            borderRadius: '8px',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+          }}>
+            <div className="summary-content">
+              {summary.split('\n').map((line, index) => (
+                <p key={index}>{line}</p>
+              ))}
+            </div>
           </div>
         )}
 
@@ -1521,58 +1601,6 @@ const App: React.FC = () => {
                 )}
               </div>
             ))}
-          </div>
-        )}
-
-        {summary && (
-          <div className="summary-container">
-            <div className="summary-content">
-              {summary.split('\n').map((line, index) => (
-                <p key={index}>{line}</p>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {mediaType === 'video' && timeline.length > 0 && (
-          <div className="timeline-container">
-            <h3>타임라인</h3>
-            <div className="timeline">
-              {timeline.map((item, index) => {
-                const minutes = Math.floor(item.timestamp / 60);
-                const seconds = Math.floor(item.timestamp % 60);
-                const formattedTime = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-                
-                return (
-                  <div
-                    key={index}
-                    className="timeline-item"
-                    onClick={() => {
-                      console.log('Timeline item clicked:', item.timestamp);
-                      console.log('Video ref:', videoRef.current);
-                      console.log('YouTube ref:', youtubePlayerRef.current);
-                      seekToTimestamp(item.timestamp);
-                    }}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <div className="timestamp">
-                      {formattedTime}
-                    </div>
-                    <div className="texts">
-                      {item.texts.map((text, textIndex) => (
-                        <div 
-                          key={textIndex} 
-                          className="text-item"
-                          style={{ color: text.color || 'inherit' }}
-                        >
-                          {text.text}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
           </div>
         )}
       </div>

@@ -116,13 +116,16 @@ body {
 }
 
 .app-logo {
+  margin-left: 50px;
   font-family: "Yde street", sans-serif;
-  font-size: 5rem;
-  font-weight: 700;
+  font-size: 4.5rem;
+  font-weight: 400;
   color: black;
   margin-top: 3rem;
   text-align: left;
   width: 100%;
+  line-height: 0.9;
+  transform: scaleY(0.6);
 }
 
 .upload-section {
@@ -149,7 +152,8 @@ body {
   border-radius: var(--radius);
   cursor: pointer;
   font-size: 1.1rem;
-  font-weight: 500;
+  letter-spacing: 0.05em;
+  font-weight: 800;
   transition: all 0.2s ease;
   display: flex;
   align-items: center;
@@ -308,11 +312,14 @@ body {
 }
 
 .app-subtitle {
-  font-size: 3rem;
-  color: var(--text-secondary);
+  margin-left: 50px;
+  font-size: 3.5rem;
+  color: black;
+  font-weight: 700;
   text-align: left;
   width: 100%;
   white-space: pre-line;
+  line-height: 1.2;
 }
 
 .error {
@@ -723,6 +730,7 @@ body {
   font-size: 1.25rem;
   color: var(--text-primary);
   text-align: left;
+  letter-spacing: 0.03em;
 }
 
 .chat-input-container {
@@ -766,6 +774,7 @@ body {
 }
 
 .chat-response {
+  text-align: left;
   flex: 1;
   margin-top: 1.5rem;
   padding: 1.5rem;
@@ -837,6 +846,7 @@ body {
   margin-left: 40px;
   text-align: left;
   margin-top: 50px;
+  letter-spacing: 0.03em;
 }
 
 .youtube-input {
