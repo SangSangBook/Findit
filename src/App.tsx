@@ -609,6 +609,19 @@ const App: React.FC = () => {
       formData.append('session_id', sessionId);
       formData.append('message', chatMessage);
       
+      // 비디오인 경우 타임라인 텍스트를 OCR 텍스트로 사용
+      if (mediaType === 'video' && timeline.length > 0) {
+        const videoOcrText = timeline
+          .map(item => item.texts.map(text => text.text).join(' '))
+          .join('\n');
+        formData.append('ocr_text', videoOcrText);
+      } else {
+        // 이미지인 경우 기존 OCR 텍스트 사용
+        if (ocrText) {
+          formData.append('ocr_text', ocrText);
+        }
+      }
+      
       const imageFiles = mediaItems
         .filter(item => item.type === 'image')
         .map(item => item.file);
@@ -623,11 +636,6 @@ const App: React.FC = () => {
           formData.append(`image_types[${index}]`, mediaItem.imageType);
         }
       });
-
-      // OCR 텍스트가 있다면 추가
-      if (ocrText) {
-        formData.append('ocr_text', ocrText);
-      }
       
       console.log('FormData 내용:');
       Array.from(formData.entries()).forEach(([key, value]) => {
@@ -649,11 +657,21 @@ const App: React.FC = () => {
       
       if (data.error) {
         // 객체 감지 에러가 발생했을 때 OCR 텍스트로 재시도
-        if (ocrText) {
+        if (ocrText || (mediaType === 'video' && timeline.length > 0)) {
           const ocrFormData = new FormData();
           ocrFormData.append('session_id', sessionId);
           ocrFormData.append('message', chatMessage);
-          ocrFormData.append('ocr_text', ocrText);
+          
+          // 비디오인 경우 타임라인 텍스트를 OCR 텍스트로 사용
+          if (mediaType === 'video' && timeline.length > 0) {
+            const videoOcrText = timeline
+              .map(item => item.texts.map(text => text.text).join(' '))
+              .join('\n');
+            ocrFormData.append('ocr_text', videoOcrText);
+          } else {
+            ocrFormData.append('ocr_text', ocrText);
+          }
+          
           ocrFormData.append('use_ocr_only', 'true');
 
           const ocrResponse = await fetch('http://localhost:5001/summarize', {
@@ -672,6 +690,10 @@ const App: React.FC = () => {
             .replace(/^.*?OCR 텍스트를 통해.*?정보를 확인할 수 있습니다\.\s*/g, '')
             .replace(/^.*?죄송합니다.*?감지되지 않았습니다\.\s*/g, '')
             .replace(/^.*?이미지에서 객체가 감지되지 않았습니다\.\s*/g, '')
+            .replace(/^.*?CSS 코딩 연습에 대한 정보가.*?발견되지 않았습니다\.\s*/g, '')
+            .replace(/^.*?OCR 텍스트에는.*?포함되어 있지만.*?분석은 이루어지지 않았습니다\.\s*/g, '')
+            .replace(/^.*?따라서 해당 질문에 대한 답변을 제공할 수 없습니다\.\s*/g, '')
+            .replace(/^.*?부득이하게 OCR 텍스트에 포함된 내용을.*?필요합니다\.\s*/g, '')
             .trim();
           setChatResponse(cleanResponse);
           return;
@@ -689,6 +711,10 @@ const App: React.FC = () => {
             .replace(/^.*?OCR 텍스트를 통해.*?정보를 확인할 수 있습니다\.\s*/g, '')
             .replace(/^.*?죄송합니다.*?감지되지 않았습니다\.\s*/g, '')
             .replace(/^.*?이미지에서 객체가 감지되지 않았습니다\.\s*/g, '')
+            .replace(/^.*?CSS 코딩 연습에 대한 정보가.*?발견되지 않았습니다\.\s*/g, '')
+            .replace(/^.*?OCR 텍스트에는.*?포함되어 있지만.*?분석은 이루어지지 않았습니다\.\s*/g, '')
+            .replace(/^.*?따라서 해당 질문에 대한 답변을 제공할 수 없습니다\.\s*/g, '')
+            .replace(/^.*?부득이하게 OCR 텍스트에 포함된 내용을.*?필요합니다\.\s*/g, '')
             .trim();
           return `${index + 1}번째 이미지 (${imageType}):\n${cleanSummary}\n`;
         }).join('\n');
@@ -700,6 +726,10 @@ const App: React.FC = () => {
           .replace(/^.*?OCR 텍스트를 통해.*?정보를 확인할 수 있습니다\.\s*/g, '')
           .replace(/^.*?죄송합니다.*?감지되지 않았습니다\.\s*/g, '')
           .replace(/^.*?이미지에서 객체가 감지되지 않았습니다\.\s*/g, '')
+          .replace(/^.*?CSS 코딩 연습에 대한 정보가.*?발견되지 않았습니다\.\s*/g, '')
+          .replace(/^.*?OCR 텍스트에는.*?포함되어 있지만.*?분석은 이루어지지 않았습니다\.\s*/g, '')
+          .replace(/^.*?따라서 해당 질문에 대한 답변을 제공할 수 없습니다\.\s*/g, '')
+          .replace(/^.*?부득이하게 OCR 텍스트에 포함된 내용을.*?필요합니다\.\s*/g, '')
           .trim();
         setChatResponse(cleanResponse);
       }
@@ -1146,7 +1176,7 @@ const App: React.FC = () => {
 
       <div className="left-section">
         <div className="app-logo">Findit!</div>
-        <div className="app-subtitle">
+        <div className="app-subtitle" style={{ color: '#000000' }}>
           미디어에서{'\n'}
           정보를{'\n'}
           찾아보세요
@@ -1601,6 +1631,48 @@ const App: React.FC = () => {
                 )}
               </div>
             ))}
+          </div>
+        )}
+
+        {mediaType === 'video' && timeline.length > 0 && (
+          <div className="timeline-container">
+            <h3>타임라인</h3>
+            <div className="timeline">
+              {timeline.map((item, index) => {
+                const minutes = Math.floor(item.timestamp / 60);
+                const seconds = Math.floor(item.timestamp % 60);
+                const formattedTime = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                
+                return (
+                  <div
+                    key={index}
+                    className="timeline-item"
+                    onClick={() => {
+                      console.log('Timeline item clicked:', item.timestamp);
+                      console.log('Video ref:', videoRef.current);
+                      console.log('YouTube ref:', youtubePlayerRef.current);
+                      seekToTimestamp(item.timestamp);
+                    }}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <div className="timestamp">
+                      {formattedTime}
+                    </div>
+                    <div className="texts">
+                      {item.texts.map((text, textIndex) => (
+                        <div 
+                          key={textIndex} 
+                          className="text-item"
+                          style={{ color: text.color || 'inherit' }}
+                        >
+                          {text.text}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
