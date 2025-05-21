@@ -452,21 +452,37 @@ def extract_text_with_vision(image_path):
             
             # OCR 텍스트 처리
             if 'textAnnotations' in response:
-                for text in response['textAnnotations'][1:]:  # 첫 번째는 전체 텍스트이므로 건너뛰기
-                    vertices = text['boundingPoly']['vertices']
-                    x_coords = [vertex.get('x', 0) for vertex in vertices]
-                    y_coords = [vertex.get('y', 0) for vertex in vertices]
-                    
-                    text_blocks.append({
-                        'text': text['description'],
-                        'bbox': {
-                            'x1': min(x_coords),
-                            'y1': min(y_coords),
-                            'x2': max(x_coords),
-                            'y2': max(y_coords)
-                        },
-                        'confidence': text.get('confidence', 1.0)
-                    })
+                # 전체 텍스트를 하나의 블록으로 처리
+                full_text = response['textAnnotations'][0]['description'] if response['textAnnotations'] else ""
+                
+                # 텍스트를 문장 단위로 분리
+                sentences = []
+                current_sentence = ""
+                
+                for char in full_text:
+                    if char in ['\n', ' ']:
+                        if current_sentence:
+                            sentences.append(current_sentence)
+                            current_sentence = ""
+                    else:
+                        current_sentence += char
+                
+                if current_sentence:
+                    sentences.append(current_sentence)
+                
+                # 각 문장을 텍스트 블록으로 추가
+                for sentence in sentences:
+                    if sentence.strip():  # 빈 문장 제외
+                        text_blocks.append({
+                            'text': sentence.strip(),
+                            'bbox': {
+                                'x1': 0,
+                                'y1': 0,
+                                'x2': width,
+                                'y2': height
+                            },
+                            'confidence': 1.0
+                        })
             
             # 객체 검출 결과 처리
             if 'localizedObjectAnnotations' in response:
@@ -496,6 +512,7 @@ def extract_text_with_vision(image_path):
         
         return text_blocks, detected_objects
     except Exception as e:
+        print(f"Error in extract_text_with_vision: {e}")
         return [], []
 
 def combine_vertical_texts(coordinates):
@@ -723,7 +740,21 @@ def process_video(video_path, query, mode='normal', session_id=None):
                 if text_blocks:
                     # 현재 프레임의 OCR 텍스트 저장
                     frame_text = '\n'.join([block['text'] for block in text_blocks])
-                    all_ocr_text.append(f"=== {timestamp}초 ===\n{frame_text}")
+                    
+                    # 한 글자씩 분리된 텍스트를 문장으로 결합
+                    combined_text = ''
+                    current_sentence = ''
+                    for char in frame_text:
+                        if char in ['\n', ' ']:
+                            if current_sentence:
+                                combined_text += current_sentence + char
+                                current_sentence = ''
+                        else:
+                            current_sentence += char
+                    if current_sentence:
+                        combined_text += current_sentence
+                    
+                    all_ocr_text.append(f"=== {timestamp}초 ===\n{combined_text}")
                     
                     detected_texts = []
                     for block in text_blocks:

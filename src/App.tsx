@@ -558,12 +558,23 @@ const App: React.FC = () => {
     if (timeline.length > 0) {
       const updatedTimeline = timeline.map(item => ({
         ...item,
-        texts: item.texts.map(text => ({
-          ...text,
-          color: newSearchTerm ? 
-            (text.text.toLowerCase().includes(newSearchTerm.toLowerCase()) ? '#007bff' : '#000000') 
-            : '#000000'
-        }))
+        texts: item.texts.map(text => {
+          const textContent = text.text;
+          if (!newSearchTerm) {
+            return { ...text, color: '#000000' };
+          }
+          
+          // 검색어를 포함하는 경우, 해당 부분만 하이라이트
+          const parts = textContent.split(new RegExp(`(${newSearchTerm})`, 'gi'));
+          return {
+            ...text,
+            text: parts.map(part => 
+              part.toLowerCase() === newSearchTerm.toLowerCase() 
+                ? `<span style="color: #007bff">${part}</span>` 
+                : part
+            ).join('')
+          };
+        })
       }));
       setTimeline(updatedTimeline);
     }
@@ -1647,15 +1658,13 @@ const App: React.FC = () => {
                       {formattedTime}
                     </div>
                     <div className="texts">
-                      {item.texts.map((text, textIndex) => (
-                        <div 
-                          key={textIndex} 
-                          className="text-item"
-                          style={{ color: text.color || 'inherit' }}
-                        >
-                          {text.text}
-                        </div>
-                      ))}
+                      <div 
+                        className="text-item"
+                        style={{ color: item.texts[0]?.color || 'inherit' }}
+                        dangerouslySetInnerHTML={{ 
+                          __html: item.texts.map(text => text.text).join(' ') 
+                        }}
+                      />
                     </div>
                   </div>
                 );
