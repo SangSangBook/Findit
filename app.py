@@ -1456,13 +1456,15 @@ def analyze_image():
                                     'backgroundColor': 'rgba(0, 255, 0, 0.1)',
                                     'zIndex': 999999999999999,
                                     'pointerEvents': 'none',
-                                    'padding': '2px',
-                                    'fontSize': '12px',
+                                    'padding': '4px',
+                                    'fontSize': '14px',
                                     'color': '#00ff00',
-                                    'display': 'flex',
-                                    'alignItems': 'center',
-                                    'justifyContent': 'center'
-                                }
+                                    'fontWeight': 'bold',
+                                    'textShadow': '1px 1px 2px rgba(0,0,0,0.5)',
+                                    'whiteSpace': 'nowrap',
+                                    'overflow': 'visible'
+                                },
+                                'label': text  # 텍스트 레이블을 별도로 추가
                             })
                         else:
                             matches.append({
@@ -1505,13 +1507,15 @@ def analyze_image():
                                     'backgroundColor': 'rgba(0, 255, 0, 0.1)',
                                     'zIndex': 999999999999999,
                                     'pointerEvents': 'none',
-                                    'padding': '2px',
-                                    'fontSize': '12px',
+                                    'padding': '4px',
+                                    'fontSize': '14px',
                                     'color': '#00ff00',
-                                    'display': 'flex',
-                                    'alignItems': 'center',
-                                    'justifyContent': 'center'
-                                }
+                                    'fontWeight': 'bold',
+                                    'textShadow': '1px 1px 2px rgba(0,0,0,0.5)',
+                                    'whiteSpace': 'nowrap',
+                                    'overflow': 'visible'
+                                },
+                                'label': text  # 텍스트 레이블을 별도로 추가
                             })
                         else:
                             matches.append({

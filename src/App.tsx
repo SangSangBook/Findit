@@ -1734,21 +1734,40 @@ const App: React.FC = () => {
                       }
 
                       return (
-                        <div
-                          key={index}
-                          style={{
-                            position: 'absolute',
-                            left: x,
-                            top: y,
-                            width: width,
-                            height: height,
-                            border: obj.isObject ? '2px solid #00ff00' : '2px solid #ff0000',
-                            backgroundColor: obj.isObject ? 'rgba(0, 255, 0, 0.1)' : 'rgba(255, 0, 0, 0.1)',
-                            borderRadius: obj.isObject ? '0' : '50%',
-                            zIndex: 999999999999999,
-                            pointerEvents: 'none'
-                          }}
-                        />
+                        <div key={index}>
+                          <div
+                            style={{
+                              position: 'absolute',
+                              left: x,
+                              top: y,
+                              width: width,
+                              height: height,
+                              border: obj.isObject ? '2px solid #00ff00' : '2px solid #ff0000',
+                              backgroundColor: obj.isObject ? 'rgba(0, 255, 0, 0.1)' : 'rgba(255, 0, 0, 0.1)',
+                              borderRadius: obj.isObject ? '0' : '50%',
+                              zIndex: 999999999999999,
+                              pointerEvents: 'none'
+                            }}
+                          />
+                          <div
+                            style={{
+                              position: 'absolute',
+                              left: x,
+                              top: y - 20,
+                              backgroundColor: obj.isObject ? 'rgba(0, 255, 0, 0.8)' : 'rgba(255, 0, 0, 0.8)',
+                              color: 'white',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              fontSize: '12px',
+                              fontWeight: 'bold',
+                              zIndex: 999999999999999,
+                              pointerEvents: 'none',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            {obj.text}
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
