@@ -227,7 +227,7 @@ body {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   height: 550px;
-  z-index: 999;
+  z-index: 997;
   left: 450px;
   top: 50px;
   transition: transform 0.3s ease;

@@ -408,18 +408,30 @@ const App: React.FC = () => {
       if (data.matches && data.matches.length > 0) {
         const textResults = data.matches
           .filter((obj: any) => {
-            const isExactMatch = obj.text.toLowerCase().includes(searchTerm.toLowerCase());
-            const isRelevantMatch = obj.match_type === 'semantic' && obj.confidence > 0.7;
-            const isPartialMatch = obj.text.toLowerCase().split(' ').some((word: string) => 
-              word.includes(searchTerm.toLowerCase()) || searchTerm.toLowerCase().includes(word)
+            const searchTermLower = searchTerm.toLowerCase();
+            const textLower = obj.text.toLowerCase();
+            
+            // 정확한 단어 매칭
+            const isExactMatch = textLower === searchTermLower;
+            
+            // 부분 문자열 매칭
+            const isPartialMatch = textLower.includes(searchTermLower) || searchTermLower.includes(textLower);
+            
+            // 단어 단위 매칭
+            const words = textLower.split(/\s+/);
+            const isWordMatch = words.some((word: string) => 
+              word === searchTermLower || 
+              word.includes(searchTermLower) || 
+              searchTermLower.includes(word)
             );
-            return isExactMatch || isRelevantMatch || isPartialMatch;
+            
+            return isExactMatch || isPartialMatch || isWordMatch;
           })
           .map((obj: any) => ({
             text: obj.text,
             bbox: obj.bbox,
             confidence: obj.confidence,
-            pageIndex: currentPage,
+            pageIndex: obj.pageIndex || currentPage,
             match_type: 'text',
             isObject: false
           }));
@@ -462,7 +474,7 @@ const App: React.FC = () => {
             text: obj.name || obj.text,
             bbox: obj.bbox,
             confidence: obj.confidence,
-            pageIndex: currentPage,
+            pageIndex: obj.pageIndex,
             match_type: 'object',
             isObject: true
           }));
@@ -476,20 +488,27 @@ const App: React.FC = () => {
         setDetectedObjects(allResults);
         setNoResults(false);
         
-        // 타임라인 업데이트 (기존 타임라인 유지하면서 하이라이트만 업데이트)
-        if (timeline.length > 0) {
-          const updatedTimeline = timeline.map(item => ({
-            ...item,
-            texts: item.texts.map(text => ({
-              ...text,
-              color: text.text.toLowerCase().includes(searchTerm.toLowerCase()) ? '#007bff' : undefined
-            }))
-          }));
-          setTimeline(updatedTimeline);
-        }
-
-        const pages = [currentPage];
+        // 검색 결과가 있는 페이지 목록 업데이트
+        const pages = Array.from(new Set(allResults.map(obj => obj.pageIndex).filter((page): page is number => page !== undefined)));
         setSearchResultPages(pages);
+        
+        // 현재 페이지에 결과가 있는지 확인
+        const hasResultsOnCurrentPage = allResults.some(obj => obj.pageIndex === currentPage);
+        if (!hasResultsOnCurrentPage) {
+          // 현재 페이지에 결과가 없으면 첫 번째 결과가 있는 페이지로 이동
+          const firstResultPage = pages[0];
+          if (firstResultPage !== undefined) {
+            handlePageChange(firstResultPage);
+            const targetMedia = mediaItems[firstResultPage];
+            setSelectedMedia(targetMedia);
+            setMediaType(targetMedia.type);
+            setMediaUrl(targetMedia.url);
+            if (targetMedia.imageType) {
+              setSelectedImageType(targetMedia.imageType);
+            }
+          }
+        }
+        
         setPageNotification({ show: false, direction: null });
       } else {
         console.log('검색 결과 없음');
@@ -550,6 +569,8 @@ const App: React.FC = () => {
   };
 
   const handleMediaItemClick = (media: MediaItem) => {
+    if (!media) return;
+    
     if (media.type === 'image') {
       setSelectedMedia(media);
       setMediaType('image');
@@ -890,26 +911,32 @@ const App: React.FC = () => {
 
   const handlePrevPage = () => {
     if (currentPage > 0) {
-      handlePageChange(currentPage - 1);
-      const prevMedia = mediaItems[currentPage - 1];
-      setSelectedMedia(prevMedia);
-      setMediaType(prevMedia.type);
-      setMediaUrl(prevMedia.url);
-      if (prevMedia.imageType) {
-        setSelectedImageType(prevMedia.imageType);
+      const newPage = currentPage - 1;
+      handlePageChange(newPage);
+      const prevMedia = mediaItems[newPage];
+      if (prevMedia) {
+        setSelectedMedia(prevMedia);
+        setMediaType(prevMedia.type);
+        setMediaUrl(prevMedia.url);
+        if (prevMedia.imageType) {
+          setSelectedImageType(prevMedia.imageType);
+        }
       }
     }
   };
 
   const handleNextPage = () => {
     if (currentPage < mediaItems.length - 1) {
-      handlePageChange(currentPage + 1);
-      const nextMedia = mediaItems[currentPage + 1];
-      setSelectedMedia(nextMedia);
-      setMediaType(nextMedia.type);
-      setMediaUrl(nextMedia.url);
-      if (nextMedia.imageType) {
-        setSelectedImageType(nextMedia.imageType);
+      const newPage = currentPage + 1;
+      handlePageChange(newPage);
+      const nextMedia = mediaItems[newPage];
+      if (nextMedia) {
+        setSelectedMedia(nextMedia);
+        setMediaType(nextMedia.type);
+        setMediaUrl(nextMedia.url);
+        if (nextMedia.imageType) {
+          setSelectedImageType(nextMedia.imageType);
+        }
       }
     }
   };
@@ -1054,49 +1081,41 @@ const App: React.FC = () => {
   }, [modalImageRef.current]);
 
   const drawDetectedObjects = (ctx: CanvasRenderingContext2D, image: HTMLImageElement, detectedObjects: any[]) => {
-    // 캔버스 크기를 이미지 크기와 동일하게 설정
     ctx.canvas.width = image.width;
     ctx.canvas.height = image.height;
-    
-    // 이미지 그리기
     ctx.drawImage(image, 0, 0, image.width, image.height);
-    
-    // 감지된 객체 그리기
+
     detectedObjects.forEach(obj => {
-        const bbox = obj.bbox;
-        const x = bbox.x1 * image.width;
-        const y = bbox.y1 * image.height;
-        const width = (bbox.x2 - bbox.x1) * image.width;
-        const height = (bbox.y2 - bbox.y1) * image.height;
-        
-        // 객체 인식 결과인 경우 (녹색 네모)
-        if (obj.match_type === 'object') {
-            ctx.strokeStyle = 'green';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(x, y, width, height);
-            
-            // 텍스트 표시
-            ctx.fillStyle = 'green';
-            ctx.font = '16px Arial';
-            ctx.fillText(obj.text, x, y - 5);
-        }
-        // 텍스트 검색 결과인 경우 (빨간 동그라미)
-        else if (obj.match_type === 'text') {
-            const centerX = x + width / 2;
-            const centerY = y + height / 2;
-            const radius = Math.min(width, height) * 0.3;  // 동그라미 크기 증가
-            
-            ctx.beginPath();
-            ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
-            ctx.strokeStyle = 'red';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-            
-            // 텍스트 표시
-            ctx.fillStyle = 'red';
-            ctx.font = '16px Arial';
-            ctx.fillText(obj.text, x, y - 5);
-        }
+      const bbox = obj.bbox;
+      // bbox가 0~1 사이면 정규화, 아니면 픽셀 단위
+      const isNormalized = bbox.x1 <= 1 && bbox.y1 <= 1 && bbox.x2 <= 1 && bbox.y2 <= 1;
+      const x1 = isNormalized ? bbox.x1 * image.width : bbox.x1;
+      const y1 = isNormalized ? bbox.y1 * image.height : bbox.y1;
+      const x2 = isNormalized ? bbox.x2 * image.width : bbox.x2;
+      const y2 = isNormalized ? bbox.y2 * image.height : bbox.y2;
+      const width = x2 - x1;
+      const height = y2 - y1;
+
+      if (obj.match_type === 'object' || obj.isObject) {
+        ctx.strokeStyle = 'green';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x1, y1, width, height);
+        ctx.fillStyle = 'green';
+        ctx.font = '16px Arial';
+        ctx.fillText(obj.text, x1, y1 - 5);
+      } else if (obj.match_type === 'text') {
+        const centerX = (x1 + x2) / 2;
+        const centerY = (y1 + y2) / 2;
+        const radius = Math.max(width, height) * 0.3;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.fillStyle = 'red';
+        ctx.font = '16px Arial';
+        ctx.fillText(obj.text, x1, y1 - 5);
+      }
     });
   };
 
@@ -1288,13 +1307,13 @@ const App: React.FC = () => {
 
       <div className="right-section">
         <div className="media-container">
-          <div className={`selected-media ${selectedMedia && selectedMedia.type === 'image' ? 'has-media' : ''}`} style={{ 
+          <div className={`selected-media ${selectedMedia?.type === 'image' ? 'has-media' : ''}`} style={{ 
             display: 'flex', 
             flexDirection: 'column',
             minHeight: '0',
             height: '100%'
           }}>
-            {selectedMedia && selectedMedia.type === 'image' ? (
+            {selectedMedia?.type === 'image' ? (
               <div className="image-viewer" style={{ 
                 flex: '1 1 auto',
                 minHeight: '0',
@@ -1451,7 +1470,7 @@ const App: React.FC = () => {
               padding: '20px', 
               backgroundColor: '#f8f9fa', 
               borderRadius: '8px',
-              zIndex: 9999,
+              zIndex: 1000,
               cursor: 'move',
               textAlign: 'left',
               boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
@@ -1758,6 +1777,7 @@ const App: React.FC = () => {
                 const y1 = isNormalized ? bbox.y1 * imgElement.naturalHeight : bbox.y1;
                 const x2 = isNormalized ? bbox.x2 * imgElement.naturalWidth : bbox.x2;
                 const y2 = isNormalized ? bbox.y2 * imgElement.naturalHeight : bbox.y2;
+
                 // 객체 인식 결과: 녹색 네모
                 if (obj.isObject || obj.match_type === 'object') {
                   const displayX1 = x1 * scaleX;
