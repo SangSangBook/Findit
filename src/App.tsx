@@ -120,6 +120,10 @@ const App: React.FC = () => {
   const [taskSuggestions, setTaskSuggestions] = useState<TaskSuggestion[]>([]);
   const [isTaskSuggesting, setIsTaskSuggesting] = useState(false);
   const [ocrCache, setOcrCache] = useState<Map<string, {text: string, objects: DetectedObject[]}>>(new Map());
+  const [taskSuggestionPosition, setTaskSuggestionPosition] = useState({ x: 117, y: 494 });
+  const [isDraggingTaskSuggestion, setIsDraggingTaskSuggestion] = useState(false);
+  const [taskSuggestionDragOffset, setTaskSuggestionDragOffset] = useState({ x: 0, y: 0 });
+  const taskSuggestionRef = useRef<HTMLDivElement>(null);
 
   const getTaskSuggestions = async (text: string) => {
     console.log('=== 태스크 제안 시작 ===');
@@ -1023,6 +1027,42 @@ const App: React.FC = () => {
     await handleChat();
   };
 
+  const handleTaskSuggestionMouseDown = (e: React.MouseEvent) => {
+    if (e.target instanceof HTMLElement && e.target.closest('.task-suggestions-section')) {
+      setIsDraggingTaskSuggestion(true);
+      const rect = taskSuggestionRef.current?.getBoundingClientRect();
+      if (rect) {
+        setTaskSuggestionDragOffset({
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top
+        });
+      }
+    }
+  };
+
+  const handleTaskSuggestionMouseMove = (e: MouseEvent) => {
+    if (isDraggingTaskSuggestion && taskSuggestionRef.current) {
+      const x = e.clientX - taskSuggestionDragOffset.x;
+      const y = e.clientY - taskSuggestionDragOffset.y;
+      setTaskSuggestionPosition({ x, y });
+    }
+  };
+
+  const handleTaskSuggestionMouseUp = () => {
+    setIsDraggingTaskSuggestion(false);
+  };
+
+  useEffect(() => {
+    if (isDraggingTaskSuggestion) {
+      window.addEventListener('mousemove', handleTaskSuggestionMouseMove);
+      window.addEventListener('mouseup', handleTaskSuggestionMouseUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleTaskSuggestionMouseMove);
+      window.removeEventListener('mouseup', handleTaskSuggestionMouseUp);
+    };
+  }, [isDraggingTaskSuggestion, taskSuggestionDragOffset]);
+
   if (isLoading) {
     return <NetflixLoader />;
   }
@@ -1308,12 +1348,23 @@ const App: React.FC = () => {
             )}
           </div>
 
-          <div className="task-suggestions-section" style={{ 
-            padding: '20px', 
-            backgroundColor: '#f8f9fa', 
-            borderRadius: '8px', 
-            marginTop: '20px' 
-          }}>
+          <div className="task-suggestions-section" 
+            ref={taskSuggestionRef}
+            onMouseDown={handleTaskSuggestionMouseDown}
+            style={{ 
+              position: 'fixed',
+              left: `${taskSuggestionPosition.x}px`,
+              top: `${taskSuggestionPosition.y}px`,
+              padding: '20px', 
+              backgroundColor: '#f8f9fa', 
+              borderRadius: '8px',
+              zIndex: 9999,
+              cursor: 'move',
+              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+              width: '300px',
+              maxHeight: '400px',
+              overflowY: 'auto'
+            }}>
             <h3 style={{ marginBottom: '15px', color: '#333' }}>
               {isTaskSuggesting ? '태스크 제안 생성 중...' : '태스크 제안'}
             </h3>
@@ -1372,7 +1423,7 @@ const App: React.FC = () => {
               </div>
             ) : (
               <div style={{ textAlign: 'center', color: '#666' }}>
-                이미지를 업로드하면 태스크 제안이 여기에 표시됩니다
+                한 번의 업로드, 수많은 가능성의 제안.
               </div>
             )}
           </div>
