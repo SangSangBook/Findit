@@ -31,18 +31,18 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 load_dotenv()
 
 # 환경 변수 디버깅
-print("\n=== 환경 변수 확인 ===")
-print(f"OPENAI_API_KEY: {os.getenv('OPENAI_API_KEY')}")
-print(f"GOOGLE_CLOUD_VISION_API_KEY: {os.getenv('GOOGLE_CLOUD_VISION_API_KEY')}")
-print(f"GOOGLE_APPLICATION_CREDENTIALS: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}")
-print("=====================\n")
+# print("\n=== 환경 변수 확인 ===")
+# print(f"OPENAI_API_KEY: {os.getenv('OPENAI_API_KEY')}")
+# print(f"GOOGLE_CLOUD_VISION_API_KEY: {os.getenv('GOOGLE_CLOUD_VISION_API_KEY')}")
+# print(f"GOOGLE_APPLICATION_CREDENTIALS: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}")
+# print("=====================\n")
 
 # OpenAI API 키 설정
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
     print("경고: OPENAI_API_KEY가 설정되지 않았습니다.")
-else:
-    print(f"OpenAI API 키가 설정되었습니다. (길이: {len(OPENAI_API_KEY)}자)")
+# else:
+#     print(f"OpenAI API 키가 설정되었습니다. (길이: {len(OPENAI_API_KEY)}자)")
 
 # OpenAI 클라이언트 초기화
 client = OpenAI(api_key=OPENAI_API_KEY)  # API 키를 명시적으로 전달
@@ -51,8 +51,8 @@ client = OpenAI(api_key=OPENAI_API_KEY)  # API 키를 명시적으로 전달
 API_KEY = os.getenv('GOOGLE_CLOUD_VISION_API_KEY')
 if not API_KEY:
     print("경고: GOOGLE_CLOUD_VISION_API_KEY가 설정되지 않았습니다.")
-else:
-    print(f"Google Vision API 키가 설정되었습니다. (길이: {len(API_KEY)}자)")
+# else:
+#     print(f"Google Vision API 키가 설정되었습니다. (길이: {len(API_KEY)}자)")
 VISION_API_URL = f'https://vision.googleapis.com/v1/images:annotate?key={API_KEY}'
 
 # 연관어 캐시
@@ -69,7 +69,7 @@ try:
         vision_client = vision.ImageAnnotatorClient(credentials=credentials)
     else:
         vision_client = vision.ImageAnnotatorClient()
-    print("Google Cloud Vision 클라이언트가 성공적으로 초기화되었습니다.")
+    # print("Google Cloud Vision 클라이언트가 성공적으로 초기화되었습니다.")
 except Exception as e:
     print(f"Google Cloud Vision 클라이언트 초기화 오류: {str(e)}")
     vision_client = None
@@ -80,7 +80,7 @@ ocr_results_cache = {}
 def get_related_words(query, ocr_texts):
     """OCR에서 추출된 텍스트 중에서 연관어를 찾습니다."""
     if query in related_words_cache:
-        print(f"캐시에서 연관어를 가져옵니다: {query}")
+        # print(f"캐시에서 연관어를 가져옵니다: {query}")
         return related_words_cache[query]
     
     max_retries = 2
@@ -117,8 +117,8 @@ def get_related_words(query, ocr_texts):
             
             # 캐시에 저장
             related_words_cache[query] = related_words
-            print(f"새로운 연관어를 캐시에 저장했습니다: {query}")
-            print(f"찾은 연관어 목록: {related_words}")
+            # print(f"새로운 연관어를 캐시에 저장했습니다: {query}")
+            # print(f"찾은 연관어 목록: {related_words}")
             return related_words
             
         except Exception as e:
@@ -303,41 +303,42 @@ def analyze_image(image_path, query, mode='normal'):
         print(f"이미지 분석 시작: {image_path}")
         print(f"검색어: '{query}', 모드: {mode}")
         
-        # OCR로 텍스트 추출
-        ocr_text, coordinates = extract_text_with_vision(image_path)
-        detected_objects = []
+        # OCR로 텍스트 추출 및 객체 인식
+        text_blocks, detected_objects = extract_text_with_vision(image_path)
         
-        # coordinates가 비어있으면 빈 배열 반환
-        if not coordinates:
-            print("OCR 결과가 비어있습니다.")
-            return []
-            
-        print(f"검색 가능한 텍스트 목록: {list(coordinates.keys())}")
+        # 검색 결과 초기화
+        matches = []
+        all_detected_objects = []
         
-        # 일반 검색
-        query_lower = query.lower().strip()
-        for text, data in coordinates.items():
-            text_lower = text.lower().strip()
-            # 특수문자와 공백 제거
-            text_clean = re.sub(r'[^\w\s]', '', text_lower)
-            
-            # 단어의 시작이나 끝에서 매칭
-            if (text_clean == query_lower or  # 완전한 단어 매칭
-                text_clean.startswith(query_lower) or  # 단어로 시작
-                text_clean.endswith(query_lower) or  # 단어가 포함됨
-                query_lower in text_clean):  # 단어가 포함됨
-                print(f"매칭 발견: '{text}' (검색어: '{query}')")
-                detected_objects.append({
-                    'text': text,
-                    'bbox': data['bbox'],
-                    'confidence': data['confidence']
-                })
+        # 객체 인식 결과 처리
+        if detected_objects:
+            query_lower = query.lower()
+            for obj in detected_objects:
+                obj_name = obj['text'].lower()
+                if query_lower in obj_name or obj_name in query_lower:
+                    all_detected_objects.append({
+                        'name': obj['text'],
+                        'bbox': obj['bbox'],
+                        'confidence': obj['confidence'],
+                        'match_type': 'object'
+                    })
         
-        print(f"검색 결과: {len(detected_objects)}개의 매칭된 텍스트 발견")
-        for obj in detected_objects:
-            print(f"매칭된 텍스트: {obj['text']}")
+        # 텍스트 검색
+        if text_blocks:
+            query_lower = query.lower()
+            for block in text_blocks:
+                text_lower = block['text'].lower()
+                if query_lower in text_lower or text_lower in query_lower:
+                    matches.append({
+                        'text': block['text'],
+                        'bbox': block['bbox'],
+                        'confidence': block['confidence'],
+                        'match_type': 'text'
+                    })
         
-        return detected_objects
+        print(f"검색 결과: {len(matches)}개의 텍스트 매칭, {len(all_detected_objects)}개의 객체 매칭")
+        return matches + all_detected_objects
+        
     except Exception as e:
         print(f"Error in analyze_image: {e}")
         return []
@@ -379,29 +380,13 @@ def extract_text_with_vision(image_path):
 
         # 이미지 크기 조정 (너무 작거나 큰 경우)
         height, width = image.shape[:2]
+        
         if width > 2000 or height > 2000:
             scale = min(2000/width, 2000/height)
             image = cv2.resize(image, None, fx=scale, fy=scale)
 
-        # 그레이스케일 변환
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # 노이즈 제거
-        denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
-        
-        # 대비 향상
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(denoised)
-        
-        # 이진화
-        _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        # 모폴로지 연산으로 텍스트 선명도 향상
-        kernel = np.ones((1,1), np.uint8)
-        morph = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-        
         # 이미지를 base64로 인코딩
-        _, img_encoded = cv2.imencode('.jpg', morph)
+        _, img_encoded = cv2.imencode('.jpg', image)
         content = base64.b64encode(img_encoded).decode('utf-8')
         
         # API 요청 데이터 준비
@@ -449,7 +434,6 @@ def extract_text_with_vision(image_path):
             })
             result = response.to_dict()
         else:
-            # vision_client가 없는 경우 HTTP 요청 사용
             current_api_key = os.getenv('GOOGLE_CLOUD_VISION_API_KEY')
             if not current_api_key:
                 raise ValueError("Google Cloud Vision API 키가 설정되지 않았습니다.")
@@ -466,95 +450,27 @@ def extract_text_with_vision(image_path):
         if 'responses' in result and result['responses']:
             response = result['responses'][0]
             
-            # 텍스트 검출 결과 처리
+            # OCR 텍스트 처리
             if 'textAnnotations' in response:
-                texts = response['textAnnotations']
-                img = Image.open(image_path)
-                width, height = img.size
-                
-                # 첫 번째 텍스트는 전체 텍스트이므로 건너뜀
-                current_line = []
-                current_y = None
-                y_threshold = height * 0.05  # 같은 줄로 간주할 y좌표 차이 임계값
-                
-                for text in texts[1:]:
+                for text in response['textAnnotations'][1:]:  # 첫 번째는 전체 텍스트이므로 건너뛰기
                     vertices = text['boundingPoly']['vertices']
                     x_coords = [vertex.get('x', 0) for vertex in vertices]
                     y_coords = [vertex.get('y', 0) for vertex in vertices]
                     
-                    x1 = min(x_coords)
-                    y1 = min(y_coords)
-                    x2 = max(x_coords)
-                    y2 = max(y_coords)
-                    
-                    # 현재 텍스트의 중심 y좌표
-                    current_y_center = (y1 + y2) / 2
-                    
-                    # 새로운 줄인지 확인
-                    if current_y is None:
-                        current_y = current_y_center
-                        current_line.append(text)
-                    elif abs(current_y_center - current_y) <= y_threshold:
-                        # 같은 줄에 있는 텍스트
-                        current_line.append(text)
-                    else:
-                        # 새로운 줄 시작
-                        if current_line:
-                            # 현재 줄의 텍스트들을 x좌표로 정렬하여 결합
-                            current_line.sort(key=lambda t: min([v.get('x', 0) for v in t['boundingPoly']['vertices']]))
-                            combined_text = ' '.join([t['description'] for t in current_line])
-                            
-                            # 첫 번째 텍스트의 bbox를 사용
-                            first_text = current_line[0]
-                            vertices = first_text['boundingPoly']['vertices']
-                            x_coords = [vertex.get('x', 0) for vertex in vertices]
-                            y_coords = [vertex.get('y', 0) for vertex in vertices]
-                            
-                            normalized_bbox = {
-                                'x1': min(x_coords) / width,
-                                'y1': min(y_coords) / height,
-                                'x2': max(x_coords) / width,
-                                'y2': max(y_coords) / height
-                            }
-                            
-                            text_blocks.append({
-                                'text': combined_text,
-                                'bbox': normalized_bbox,
-                                'confidence': text.get('confidence', 1.0)
-                            })
-                        
-                        # 새로운 줄 시작
-                        current_line = [text]
-                        current_y = current_y_center
-                
-                # 마지막 줄 처리
-                if current_line:
-                    current_line.sort(key=lambda t: min([v.get('x', 0) for v in t['boundingPoly']['vertices']]))
-                    combined_text = ' '.join([t['description'] for t in current_line])
-                    
-                    first_text = current_line[0]
-                    vertices = first_text['boundingPoly']['vertices']
-                    x_coords = [vertex.get('x', 0) for vertex in vertices]
-                    y_coords = [vertex.get('y', 0) for vertex in vertices]
-                    
-                    normalized_bbox = {
-                        'x1': min(x_coords) / width,
-                        'y1': min(y_coords) / height,
-                        'x2': max(x_coords) / width,
-                        'y2': max(y_coords) / height
-                    }
-                    
                     text_blocks.append({
-                        'text': combined_text,
-                        'bbox': normalized_bbox,
+                        'text': text['description'],
+                        'bbox': {
+                            'x1': min(x_coords),
+                            'y1': min(y_coords),
+                            'x2': max(x_coords),
+                            'y2': max(y_coords)
+                        },
                         'confidence': text.get('confidence', 1.0)
                     })
             
             # 객체 검출 결과 처리
             if 'localizedObjectAnnotations' in response:
                 objects = response['localizedObjectAnnotations']
-                img = Image.open(image_path)
-                width, height = img.size
                 
                 for obj in objects:
                     vertices = obj['boundingPoly']['normalizedVertices']
@@ -577,15 +493,20 @@ def extract_text_with_vision(image_path):
                         'confidence': obj['score'],
                         'match_type': 'object'
                     })
-                    print(f"감지된 객체: {obj['name']} (신뢰도: {obj['score']:.2f})")
         
         return text_blocks, detected_objects
     except Exception as e:
-        print(f"Error in extract_text_with_vision: {str(e)}")
         return [], []
 
 def combine_vertical_texts(coordinates):
     """세로로 정렬된 텍스트들을 하나의 텍스트로 결합"""
+    # coordinates가 리스트인 경우 딕셔너리로 변환
+    if isinstance(coordinates, list):
+        coordinates_dict = {}
+        for i, coord in enumerate(coordinates):
+            coordinates_dict[f'block_{i}'] = coord
+        coordinates = coordinates_dict
+    
     combined_coordinates = coordinates.copy()
     processed = set()
     
@@ -981,16 +902,24 @@ def upload_image():
                     # 텍스트 블록에서 전체 텍스트와 좌표 정보 추출
                     ocr_text = '\n'.join([block['text'] for block in text_blocks])
                     
-                    # 텍스트 블록 좌표 정보 저장
-                    coordinates = {block['text']: {'bbox': block['bbox'], 'confidence': block['confidence']} for block in text_blocks}
+                    # 텍스트 블록 좌표 정보를 리스트로 저장
+                    coordinates = []
+                    for block in text_blocks:
+                        coordinates.append({
+                            'text': block['text'],
+                            'bbox': block['bbox'],
+                            'confidence': block['confidence'],
+                            'match_type': 'text'
+                        })
                     
-                    # 객체 인식 결과도 좌표 정보에 추가
+                    # 객체 인식 결과도 리스트에 추가
                     for obj in detected_objects:
-                        coordinates[obj['text']] = {
+                        coordinates.append({
+                            'text': obj['text'],
                             'bbox': obj['bbox'],
                             'confidence': obj['confidence'],
-                            'match_type': 'object'  # 객체 인식 결과임을 표시
-                        }
+                            'match_type': 'object'
+                        })
                     
                     # 이미지 타입 감지
                     image_type = detect_image_type(ocr_text)
@@ -998,11 +927,19 @@ def upload_image():
                     
                     # 각 이미지의 OCR 결과를 저장
                     ocr_results_cache[session_id]['text'] += f"\n--- 이미지 {len(uploaded_files) + 1} ---\n{ocr_text}"
-                    ocr_results_cache[session_id]['coordinates'].update(coordinates)
+                    ocr_results_cache[session_id]['coordinates'] = coordinates
                     
                     # 전체 OCR 텍스트와 좌표 정보 결합
                     combined_ocr_text += f"\n--- 이미지 {len(uploaded_files) + 1} ---\n{ocr_text}"
-                    combined_coordinates.update(coordinates)
+                    
+                    # coordinates가 리스트인 경우 딕셔너리로 변환
+                    if isinstance(coordinates, list):
+                        coordinates_dict = {}
+                        for i, coord in enumerate(coordinates):
+                            coordinates_dict[f'image_{len(uploaded_files) + 1}_block_{i}'] = coord
+                        combined_coordinates.update(coordinates_dict)
+                    else:
+                        combined_coordinates.update(coordinates)
                 
                 uploaded_files.append({
                     'filename': filename,
@@ -1491,54 +1428,150 @@ def analyze_image():
             if is_korean_query:
                 from src.utils.languageMapping import koreanToEnglish
                 korean_matches = koreanToEnglish.get(query_lower, [])
-                print(f"한글 검색어 '{query}'의 영어 매핑: {korean_matches}")
             
-            for text, data in coordinates.items():
-                text_lower = text.lower()
-                
-                # 직접 매칭 확인
-                direct_match = query_lower in text_lower
-                
-                # 한글-영어 매핑 확인
-                mapped_match = False
-                if is_korean_query:
-                    mapped_match = any(english.lower() in text_lower for english in korean_matches)
-                
-                if direct_match or mapped_match:
-                    # 객체 인식 결과인 경우 (녹색 네모)
-                    if data.get('match_type') == 'object':
-                        all_detected_objects.append({
-                            'name': text,
-                            'bbox': data['bbox'],
-                            'confidence': data.get('confidence', 1.0),
-                            'match_type': 'object'
-                        })
-                    # 텍스트 검색 결과인 경우 (빨간 동그라미)
-                    else:
-                        matches.append({
-                            'text': text,
-                            'bbox': data['bbox'],
-                            'confidence': data.get('confidence', 1.0),
-                            'match_type': 'text'
-                        })
-
-        print(f"매칭된 결과 수: {len(matches)}")
-        print(f"감지된 객체 수: {len(all_detected_objects)}")
+            # coordinates가 리스트인 경우 처리
+            if isinstance(coordinates, list):
+                for item in coordinates:
+                    text = item.get('text', '')
+                    text_lower = text.lower()
+                    
+                    # 직접 매칭 확인
+                    direct_match = query_lower in text_lower
+                    
+                    # 한글-영어 매핑 확인
+                    mapped_match = False
+                    if is_korean_query:
+                        mapped_match = any(english.lower() in text_lower for english in korean_matches)
+                    
+                    if direct_match or mapped_match:
+                        if item.get('match_type') == 'object':
+                            all_detected_objects.append({
+                                'name': text,
+                                'bbox': item['bbox'],
+                                'confidence': item.get('confidence', 1.0),
+                                'match_type': 'object',
+                                'style': {
+                                    'position': 'absolute',
+                                    'border': '2px solid #00ff00',
+                                    'backgroundColor': 'rgba(0, 255, 0, 0.1)',
+                                    'zIndex': 999999999999999,
+                                    'pointerEvents': 'none',
+                                    'padding': '2px',
+                                    'fontSize': '12px',
+                                    'color': '#00ff00',
+                                    'display': 'flex',
+                                    'alignItems': 'center',
+                                    'justifyContent': 'center'
+                                }
+                            })
+                        else:
+                            matches.append({
+                                'text': text,
+                                'bbox': item['bbox'],
+                                'confidence': item.get('confidence', 1.0),
+                                'match_type': 'text',
+                                'style': {
+                                    'position': 'absolute',
+                                    'border': '2px solid #ff0000',
+                                    'borderRadius': '50%',
+                                    'backgroundColor': 'rgba(255, 0, 0, 0.1)',
+                                    'zIndex': 999999999999999,
+                                    'pointerEvents': 'none'
+                                }
+                            })
+            else:
+                # 기존 딕셔너리 처리 로직
+                for text, data in coordinates.items():
+                    text_lower = text.lower()
+                    
+                    # 직접 매칭 확인
+                    direct_match = query_lower in text_lower
+                    
+                    # 한글-영어 매핑 확인
+                    mapped_match = False
+                    if is_korean_query:
+                        mapped_match = any(english.lower() in text_lower for english in korean_matches)
+                    
+                    if direct_match or mapped_match:
+                        if data.get('match_type') == 'object':
+                            all_detected_objects.append({
+                                'name': text,
+                                'bbox': data['bbox'],
+                                'confidence': data.get('confidence', 1.0),
+                                'match_type': 'object',
+                                'style': {
+                                    'position': 'absolute',
+                                    'border': '2px solid #00ff00',
+                                    'backgroundColor': 'rgba(0, 255, 0, 0.1)',
+                                    'zIndex': 999999999999999,
+                                    'pointerEvents': 'none',
+                                    'padding': '2px',
+                                    'fontSize': '12px',
+                                    'color': '#00ff00',
+                                    'display': 'flex',
+                                    'alignItems': 'center',
+                                    'justifyContent': 'center'
+                                }
+                            })
+                        else:
+                            matches.append({
+                                'text': text,
+                                'bbox': data['bbox'],
+                                'confidence': data.get('confidence', 1.0),
+                                'match_type': 'text',
+                                'style': {
+                                    'position': 'absolute',
+                                    'border': '2px solid #ff0000',
+                                    'borderRadius': '50%',
+                                    'backgroundColor': 'rgba(255, 0, 0, 0.1)',
+                                    'zIndex': 999999999999999,
+                                    'pointerEvents': 'none'
+                                }
+                            })
 
         response_data = {
             'matches': matches,
             'detected_objects': all_detected_objects,
             'ocr_text': ocr_text,
             'total_matches': len(matches),
-            'total_objects': len(all_detected_objects)
+            'total_objects': len(all_detected_objects),
+            'styles': {
+                'overlay': {
+                    'position': 'absolute',
+                    'top': 0,
+                    'left': 0,
+                    'width': '100%',
+                    'height': '100%',
+                    'pointerEvents': 'none',
+                    'zIndex': 999999999999999
+                },
+                'text': {
+                    'position': 'absolute',
+                    'color': '#ff0000',
+                    'backgroundColor': 'rgba(255, 0, 0, 0.1)',
+                    'borderRadius': '50%',
+                    'border': '2px solid #ff0000',
+                    'padding': '2px',
+                    'fontSize': '12px',
+                    'zIndex': 999999999999999,
+                    'pointerEvents': 'none'
+                },
+                'object': {
+                    'position': 'absolute',
+                    'color': '#00ff00',
+                    'backgroundColor': 'rgba(0, 255, 0, 0.1)',
+                    'border': '2px solid #00ff00',
+                    'padding': '2px',
+                    'fontSize': '12px',
+                    'zIndex': 999999999999999,
+                    'pointerEvents': 'none'
+                }
+            }
         }
 
         return jsonify(response_data)
 
     except Exception as e:
-        print(f"Error in analyze_image: {str(e)}")
-        import traceback
-        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 def get_similar_terms(query: str) -> list:
