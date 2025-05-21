@@ -1396,7 +1396,7 @@ body {
   display: flex;
   justify-content: center;
   align-items: center;
-  z-index: 1000;
+  z-index: 9999;
   padding: 2rem;
   will-change: transform;
   transform: translateZ(0);
