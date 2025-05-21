@@ -90,6 +90,6 @@ npm start
 | 김경민 | 팀장 / 앱 개발 / UI 개발 / OCR / Text Detection / Object Detection | @CTOKKM    |
 | 송승윤 | 앱 개발 / OCR / 이미지 유형 자동 식별 / 태스크 제안 | @SongCodeMaster    |
 | 이용원 | 앱 개발 / 영상 처리 / STT | @2sick2    |
-| 이영희 | 웹 개발 / 자연어처리 / 영상 처리 / Text Detection | @niroey    |
+| 하여린 | 웹 개발 / 자연어처리 / 영상 처리 / Text Detection | @niroey    |
 
 ---
