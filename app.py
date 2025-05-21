@@ -1921,12 +1921,13 @@ def summarize_document():
     try:
         session_id = request.form.get('session_id')
         message = request.form.get('message', '')
+        ocr_text = request.form.get('ocr_text', '')  # OCR 텍스트 가져오기
         
         if not session_id or session_id not in ocr_results_cache:
             return jsonify({'error': '유효하지 않은 세션 ID입니다'}), 400
         
         ocr_data = ocr_results_cache[session_id]
-        combined_text = ocr_data['text']
+        combined_text = ocr_text if ocr_text else ocr_data['text']  # 전달받은 OCR 텍스트 우선 사용
         
         if not combined_text:
             return jsonify({'error': '텍스트를 추출할 수 없습니다'}), 400
@@ -1934,12 +1935,23 @@ def summarize_document():
         # 감지된 객체 정보 가져오기
         detected_objects = []
         coordinates = ocr_data.get('coordinates', {})
-        for text, data in coordinates.items():
-            if data.get('match_type') == 'object':
-                detected_objects.append({
-                    'name': text,
-                    'confidence': data.get('confidence', 1.0)
-                })
+        
+        # coordinates가 리스트인 경우 처리
+        if isinstance(coordinates, list):
+            for item in coordinates:
+                if item.get('match_type') == 'object':
+                    detected_objects.append({
+                        'name': item.get('text', ''),
+                        'confidence': item.get('confidence', 1.0)
+                    })
+        else:
+            # 기존 딕셔너리 처리
+            for text, data in coordinates.items():
+                if data.get('match_type') == 'object':
+                    detected_objects.append({
+                        'name': text,
+                        'confidence': data.get('confidence', 1.0)
+                    })
         
         # 객체 정보를 포함한 프롬프트 생성
         objects_info = ""
@@ -1960,7 +1972,7 @@ OCR 텍스트:
 
 사용자의 질문: {message}
 
-위 정보를 바탕으로 질문에 답변해주세요."""
+위 정보를 바탕으로 질문에 답변해주세요. OCR 텍스트를 우선적으로 사용하여 답변해주세요."""
         else:
             prompt = f"""다음은 이미지에서 추출된 텍스트와 감지된 객체 정보입니다:
 
@@ -1969,7 +1981,7 @@ OCR 텍스트:
 
 {objects_info}
 
-위 정보를 바탕으로 이미지를 분석해주세요."""
+위 정보를 바탕으로 이미지를 분석해주세요. OCR 텍스트를 우선적으로 사용하여 분석해주세요."""
         
         # OpenAI를 사용하여 텍스트 요약 또는 질문 답변
         summary = getInfoFromTextWithOpenAI(prompt)

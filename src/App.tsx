@@ -31,6 +31,8 @@ interface MediaItem {
   file: File;
   sessionId?: string;
   imageType?: ImageType;
+  ocrText?: string;
+  detectedObjects?: DetectedObject[];
 }
 
 interface TimelineItem {
@@ -305,9 +307,9 @@ const App: React.FC = () => {
           setSelectedImageType(data.image_type as ImageType);
         }
 
-        const newMediaItems: MediaItem[] = Array.from(files).map((file, index) => {
+        const newMediaItems: MediaItem[] = await Promise.all(Array.from(files).map(async (file, index) => {
           const url = URL.createObjectURL(file);
-          return {
+          const mediaItem: MediaItem = {
             id: `${Date.now()}_${index}`,
             type: 'image',
             url,
@@ -315,18 +317,50 @@ const App: React.FC = () => {
             sessionId: sessionId || data.session_id,
             imageType: data.image_type as ImageType
           };
-        });
+
+          // 각 이미지에 대해 OCR과 객체 인식 결과 가져오기
+          const imageFormData = new FormData();
+          imageFormData.append('images[]', file);
+          imageFormData.append('session_id', mediaItem.sessionId!);
+          imageFormData.append('mode', 'normal');
+          imageFormData.append('detect_objects', 'true');
+          imageFormData.append('perform_ocr', 'true');
+          imageFormData.append('detect_text', 'true');
+
+          const imageResponse = await fetch('http://localhost:5001/analyze-image', {
+            method: 'POST',
+            body: imageFormData,
+          });
+
+          if (imageResponse.ok) {
+            const imageData = await imageResponse.json();
+            mediaItem.ocrText = imageData.ocr_text;
+            mediaItem.detectedObjects = imageData.detected_objects;
+          }
+
+          return mediaItem;
+        }));
+
+        // 이미지 순서를 백엔드의 인식 순서와 맞추기 위해 역순으로 정렬
+        newMediaItems.reverse();
 
         setMediaItems(prev => {
-          const updatedItems = [...prev, ...newMediaItems];
-          setCurrentPage(updatedItems.length - 1);
+          // 기존 이미지들을 유지하면서 새로운 이미지들을 앞에 추가
+          const updatedItems = [...newMediaItems, ...prev];
+          setCurrentPage(0); // 첫 번째 이미지(사과)를 보여주도록 설정
           return updatedItems;
         });
 
-        const lastMediaItem = newMediaItems[newMediaItems.length - 1];
-        setSelectedMedia(lastMediaItem);
+        // 첫 번째 이미지(사과)를 선택
+        const firstMediaItem = newMediaItems[0];
+        setSelectedMedia(firstMediaItem);
         setMediaType('image');
-        setMediaUrl(lastMediaItem.url);
+        setMediaUrl(firstMediaItem.url);
+        
+        // 마지막 이미지에 대한 태스크 제안
+        if (firstMediaItem.ocrText) {
+          await getTaskSuggestions(firstMediaItem.ocrText);
+        }
       }
 
       setDetectedObjects([]);
@@ -561,20 +595,82 @@ const App: React.FC = () => {
     }
   };
 
-  const handleMediaItemClick = (media: MediaItem) => {
+  const handleMediaItemClick = async (media: MediaItem) => {
     if (!media) return;
     
     if (media.type === 'image') {
       setSelectedMedia(media);
       setMediaType('image');
       setMediaUrl(media.url);
+      
+      // 모든 이미지의 데이터를 가져오기
+      const allDetectedObjects: DetectedObject[] = [];
+      const allOcrText: string[] = [];
+      
+      for (const currentMedia of mediaItems) {
+        if (currentMedia.type === 'image') {
+          const formData = new FormData();
+          if (sessionId) {
+            formData.append('session_id', sessionId);
+          }
+          
+          try {
+            const response = await fetch('http://localhost:5001/analyze-image', {
+              method: 'POST',
+              body: formData
+            });
+            
+            if (response.ok) {
+              const data = await response.json();
+              if (data.detected_objects) {
+                allDetectedObjects.push(...data.detected_objects);
+              }
+              if (data.ocr_text) {
+                allOcrText.push(data.ocr_text);
+              }
+            }
+          } catch (error) {
+            console.error('Error analyzing image:', error);
+          }
+        }
+      }
+      
+      setDetectedObjects(allDetectedObjects);
+      
+      // 모든 OCR 텍스트를 결합
+      const combinedOcrText = allOcrText.join('\n\n');
+      
+      // 태스크 제안 가져오기
+      if (combinedOcrText) {
+        const formData = new FormData();
+        formData.append('text', combinedOcrText);
+        formData.append('type', 'task_suggestion');
+        if (sessionId) {
+          formData.append('session_id', sessionId);
+        }
+        
+        try {
+          const response = await fetch('http://localhost:5001/analyze-image', {
+            method: 'POST',
+            body: formData
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            if (data.suggestions) {
+              setTaskSuggestions(data.suggestions);
+            }
+          }
+        } catch (error) {
+          console.error('Error getting task suggestions:', error);
+        }
+      }
     } else {
       setSelectedVideo(media);
       setMediaType('video');
       setMediaUrl(media.url);
+      setTimeline([]);
     }
-    setDetectedObjects([]);
-    setTimeline([]);
   };
 
   const handleSummarize = async () => {
@@ -612,49 +708,32 @@ const App: React.FC = () => {
   };
 
   const handleChat = async () => {
-    if (!chatMessage.trim() || !sessionId) return;
+    if (!chatMessage.trim() || !selectedMedia) return;
     
     try {
       console.log('=== 채팅 요청 시작 ===');
-      console.log('세션 ID:', sessionId);
+      console.log('선택된 미디어:', selectedMedia);
       console.log('질문:', chatMessage);
       
       const formData = new FormData();
-      formData.append('session_id', sessionId);
+      formData.append('session_id', selectedMedia.sessionId!);
       formData.append('message', chatMessage);
       
-      // 비디오인 경우 타임라인 텍스트를 OCR 텍스트로 사용
-      if (mediaType === 'video' && timeline.length > 0) {
-        const videoOcrText = timeline
-          .map(item => item.texts.map(text => text.text).join(' '))
-          .join('\n');
-        formData.append('ocr_text', videoOcrText);
-      } else {
-        // 이미지인 경우 기존 OCR 텍스트 사용
-        if (ocrText) {
-          formData.append('ocr_text', ocrText);
-        }
+      // 현재 페이지의 이미지 데이터 사용
+      const currentMedia = mediaItems[currentPage];
+      
+      // OCR 텍스트가 있으면 우선적으로 사용
+      if (currentMedia && currentMedia.ocrText) {
+        console.log('OCR 텍스트 사용:', currentMedia.ocrText);
+        formData.append('ocr_text', currentMedia.ocrText);
+        formData.append('use_ocr', 'true'); // OCR 텍스트 사용 명시
       }
       
-      const imageFiles = mediaItems
-        .filter(item => item.type === 'image')
-        .map(item => item.file);
-      
-      console.log('전송할 이미지 개수:', imageFiles.length);
-      
-      imageFiles.forEach((file, index) => {
-        const mediaItem = mediaItems.find(item => item.file === file);
-        console.log(`이미지 ${index + 1} 추가:`, file.name, '타입:', mediaItem?.imageType);
-        formData.append('images', file);
-        if (mediaItem?.imageType) {
-          formData.append(`image_types[${index}]`, mediaItem.imageType);
-        }
-      });
-      
-      console.log('FormData 내용:');
-      Array.from(formData.entries()).forEach(([key, value]) => {
-        console.log(key, value);
-      });
+      // 객체 인식 결과가 있으면 추가
+      if (currentMedia && currentMedia.detectedObjects && currentMedia.detectedObjects.length > 0) {
+        console.log('객체 인식 결과 사용:', currentMedia.detectedObjects);
+        formData.append('detected_objects', JSON.stringify(currentMedia.detectedObjects));
+      }
       
       const response = await fetch('http://localhost:5001/summarize', {
         method: 'POST',
@@ -670,83 +749,21 @@ const App: React.FC = () => {
       console.log('서버 응답:', data);
       
       if (data.error) {
-        // 객체 감지 에러가 발생했을 때 OCR 텍스트로 재시도
-        if (ocrText || (mediaType === 'video' && timeline.length > 0)) {
-          const ocrFormData = new FormData();
-          ocrFormData.append('session_id', sessionId);
-          ocrFormData.append('message', chatMessage);
-          
-          // 비디오인 경우 타임라인 텍스트를 OCR 텍스트로 사용
-          if (mediaType === 'video' && timeline.length > 0) {
-            const videoOcrText = timeline
-              .map(item => item.texts.map(text => text.text).join(' '))
-              .join('\n');
-            ocrFormData.append('ocr_text', videoOcrText);
-          } else {
-            ocrFormData.append('ocr_text', ocrText);
-          }
-          
-          ocrFormData.append('use_ocr_only', 'true');
-
-          const ocrResponse = await fetch('http://localhost:5001/summarize', {
-            method: 'POST',
-            body: ocrFormData
-          });
-
-          if (!ocrResponse.ok) {
-            throw new Error('분석 중 오류가 발생했습니다.');
-          }
-
-          const ocrData = await ocrResponse.json();
-          // 시스템 메시지 제거하고 핵심 내용만 표시
-          const cleanResponse = ocrData.summary
-            .replace(/^.*?프로젝트 참여 팀원은 다음과 같습니다:\s*/g, '')
-            .replace(/^.*?OCR 텍스트를 통해.*?정보를 확인할 수 있습니다\.\s*/g, '')
-            .replace(/^.*?죄송합니다.*?감지되지 않았습니다\.\s*/g, '')
-            .replace(/^.*?이미지에서 객체가 감지되지 않았습니다\.\s*/g, '')
-            .replace(/^.*?CSS 코딩 연습에 대한 정보가.*?발견되지 않았습니다\.\s*/g, '')
-            .replace(/^.*?OCR 텍스트에는.*?포함되어 있지만.*?분석은 이루어지지 않았습니다\.\s*/g, '')
-            .replace(/^.*?따라서 해당 질문에 대한 답변을 제공할 수 없습니다\.\s*/g, '')
-            .replace(/^.*?부득이하게 OCR 텍스트에 포함된 내용을.*?필요합니다\.\s*/g, '')
-            .trim();
-          setChatResponse(cleanResponse);
-          return;
-        }
         throw new Error('분석 중 오류가 발생했습니다.');
       }
       
-      if (Array.isArray(data.summary)) {
-        const formattedResponse = data.summary.map((summary: string, index: number) => {
-          const mediaItem = mediaItems[index];
-          const imageType = mediaItem?.imageType || '알 수 없음';
-          // 시스템 메시지 제거하고 핵심 내용만 표시
-          const cleanSummary = summary
-            .replace(/^.*?프로젝트 참여 팀원은 다음과 같습니다:\s*/g, '')
-            .replace(/^.*?OCR 텍스트를 통해.*?정보를 확인할 수 있습니다\.\s*/g, '')
-            .replace(/^.*?죄송합니다.*?감지되지 않았습니다\.\s*/g, '')
-            .replace(/^.*?이미지에서 객체가 감지되지 않았습니다\.\s*/g, '')
-            .replace(/^.*?CSS 코딩 연습에 대한 정보가.*?발견되지 않았습니다\.\s*/g, '')
-            .replace(/^.*?OCR 텍스트에는.*?포함되어 있지만.*?분석은 이루어지지 않았습니다\.\s*/g, '')
-            .replace(/^.*?따라서 해당 질문에 대한 답변을 제공할 수 없습니다\.\s*/g, '')
-            .replace(/^.*?부득이하게 OCR 텍스트에 포함된 내용을.*?필요합니다\.\s*/g, '')
-            .trim();
-          return `${index + 1}번째 이미지 (${imageType}):\n${cleanSummary}\n`;
-        }).join('\n');
-        setChatResponse(formattedResponse);
-      } else {
-        // 시스템 메시지 제거하고 핵심 내용만 표시
-        const cleanResponse = data.summary
-          .replace(/^.*?프로젝트 참여 팀원은 다음과 같습니다:\s*/g, '')
-          .replace(/^.*?OCR 텍스트를 통해.*?정보를 확인할 수 있습니다\.\s*/g, '')
-          .replace(/^.*?죄송합니다.*?감지되지 않았습니다\.\s*/g, '')
-          .replace(/^.*?이미지에서 객체가 감지되지 않았습니다\.\s*/g, '')
-          .replace(/^.*?CSS 코딩 연습에 대한 정보가.*?발견되지 않았습니다\.\s*/g, '')
-          .replace(/^.*?OCR 텍스트에는.*?포함되어 있지만.*?분석은 이루어지지 않았습니다\.\s*/g, '')
-          .replace(/^.*?따라서 해당 질문에 대한 답변을 제공할 수 없습니다\.\s*/g, '')
-          .replace(/^.*?부득이하게 OCR 텍스트에 포함된 내용을.*?필요합니다\.\s*/g, '')
-          .trim();
-        setChatResponse(cleanResponse);
-      }
+      // 시스템 메시지 제거하고 핵심 내용만 표시
+      const cleanResponse = data.summary
+        .replace(/^.*?프로젝트 참여 팀원은 다음과 같습니다:\s*/g, '')
+        .replace(/^.*?OCR 텍스트를 통해.*?정보를 확인할 수 있습니다\.\s*/g, '')
+        .replace(/^.*?죄송합니다.*?감지되지 않았습니다\.\s*/g, '')
+        .replace(/^.*?이미지에서 객체가 감지되지 않았습니다\.\s*/g, '')
+        .replace(/^.*?CSS 코딩 연습에 대한 정보가.*?발견되지 않았습니다\.\s*/g, '')
+        .replace(/^.*?OCR 텍스트에는.*?포함되어 있지만.*?분석은 이루어지지 않았습니다\.\s*/g, '')
+        .replace(/^.*?따라서 해당 질문에 대한 답변을 제공할 수 없습니다\.\s*/g, '')
+        .replace(/^.*?부득이하게 OCR 텍스트에 포함된 내용을.*?필요합니다\.\s*/g, '')
+        .trim();
+      setChatResponse(cleanResponse);
     } catch (error) {
       console.error('채팅 처리 중 오류:', error);
       alert('분석 중 오류가 발생했습니다.');
