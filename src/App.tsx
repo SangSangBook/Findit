@@ -1440,6 +1440,21 @@ const App: React.FC = () => {
             )}
           </div>
 
+          <div style={{ 
+            position: 'fixed',
+            left: `${taskSuggestionPosition.x}px`,
+            top: `${taskSuggestionPosition.y}px`,
+            zIndex: 1000
+          }}>
+            <img 
+              src="/images/mp3.png" 
+              alt="background" 
+              style={{
+                width: '500px',
+                height: 'auto'
+              }}
+            />
+          </div>
           <div className="task-suggestions-section" 
             ref={taskSuggestionRef}
             onMouseDown={handleTaskSuggestionMouseDown}
@@ -1447,78 +1462,93 @@ const App: React.FC = () => {
               position: 'fixed',
               left: `${taskSuggestionPosition.x}px`,
               top: `${taskSuggestionPosition.y}px`,
-              padding: '20px', 
-              backgroundColor: '#f8f9fa', 
+              padding: '0 20px 20px 20px', 
               borderRadius: '8px',
               zIndex: 1000,
               cursor: 'move',
               textAlign: 'left',
-              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
-              width: '500px',
-              maxHeight: '400px',
-              overflowY: 'auto'
+              width: '455px',
+              maxHeight: '300px',
+              marginTop: '80px',
+              marginLeft: '22px',
+              overflow: 'visible'
             }}>
-            <h3 style={{ marginBottom: '15px', color: '#333' }}>
-              {isTaskSuggesting ? '태스크 제안 생성 중...' : '태스크 제안'}
-            </h3>
-            
-            {isTaskSuggesting ? (
-              <div style={{ textAlign: 'center', padding: '20px' }}>
-                <i className="fas fa-spinner fa-spin" style={{ fontSize: '24px', color: '#007bff' }}></i>
-                <p style={{ marginTop: '10px', color: '#666' }}>태스크를 생성하고 있습니다...</p>
-              </div>
-            ) : taskSuggestions.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {taskSuggestions.map((task, index) => (
-                  <div
-                    key={index}
-                    onClick={() => handleTaskClick(task.task)}
-                    style={{
-                      padding: '15px',
-                      backgroundColor: '#fff',
-                      borderRadius: '8px',
-                      border: '1px solid #e0e0e0',
-                      boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s ease'
-                    }}
-                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
-                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#fff'}
-                  >
-                    <div style={{ 
-                      display: 'flex', 
-                      justifyContent: 'space-between', 
-                      alignItems: 'center',
-                      marginBottom: '8px'
-                    }}>
-                      <h4 style={{ margin: 0, color: '#333' }}>{task.task}</h4>
-                      <span style={{
-                        padding: '4px 8px',
-                        borderRadius: '4px',
-                        fontSize: '0.8em',
-                        backgroundColor: 
-                          task.priority === 'high' ? '#ffebee' :
-                          task.priority === 'medium' ? '#fff3e0' :
-                          '#e8f5e9',
-                        color: 
-                          task.priority === 'high' ? '#c62828' :
-                          task.priority === 'medium' ? '#ef6c00' :
-                          '#2e7d32'
-                      }}>
-                        {task.priority === 'high' ? '높음' :
-                         task.priority === 'medium' ? '중간' :
-                         '낮음'}
-                      </span>
-                    </div>
-                    <p style={{ margin: 0, color: '#666' }}>{task.description}</p>
+            <div style={{ position: 'relative' }}>
+              <h3 style={{ 
+                textAlign: 'center',
+                fontSize: '25px', 
+                color: '#333',
+                position: 'absolute',
+                top: '-60px',
+                left: '0',
+                right: '0',
+                padding: '10px 0',
+                margin: 0,
+                zIndex: 1001
+              }}>
+                {isTaskSuggesting ? '태스크 제안 생성 중...' : '태스크 제안'}
+              </h3>
+              <div style={{ overflowY: 'auto', height: '300px' }}>
+                {isTaskSuggesting ? (
+                  <div style={{ textAlign: 'center', padding: '20px' }}>
+                    <i className="fas fa-spinner fa-spin" style={{ fontSize: '24px', color: '#007bff' }}></i>
+                    <p style={{ marginTop: '10px', color: '#666' }}>태스크를 생성하고 있습니다...</p>
                   </div>
-                ))}
+                ) : taskSuggestions.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {taskSuggestions.map((task, index) => (
+                      <div
+                        key={index}
+                        onClick={() => handleTaskClick(task.task)}
+                        style={{
+                          padding: '15px',
+                          backgroundColor: '#fff',
+                          borderRadius: '8px',
+                          border: '1px solid #e0e0e0',
+                          boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
+                        onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#fff'}
+                      >
+                        <div style={{ 
+                          display: 'flex', 
+                          justifyContent: 'flex-start', 
+                          alignItems: 'center',
+                          marginBottom: '8px',
+                          gap: '10px'
+                        }}>
+                          <span style={{
+                            padding: '4px 8px',
+                            borderRadius: '4px',
+                            fontSize: '0.8em',
+                            backgroundColor: 
+                              task.priority === 'high' ? '#ffebee' :
+                              task.priority === 'medium' ? '#fff3e0' :
+                              '#e8f5e9',
+                            color: 
+                              task.priority === 'high' ? '#c62828' :
+                              task.priority === 'medium' ? '#ef6c00' :
+                              '#2e7d32'
+                          }}>
+                            {task.priority === 'high' ? '높음' :
+                             task.priority === 'medium' ? '중간' :
+                             '낮음'}
+                          </span>
+                          <h4 style={{ margin: 0, color: '#333' }}>{task.task}</h4>
+                        </div>
+                        <p style={{ marginLeft: '15px', color: '#666' }}>{task.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ color: '#666' }}>
+                    한 번의 업로드, 수많은 가능성의 제안.
+                  </div>
+                )}
               </div>
-            ) : (
-              <div style={{ color: '#666' }}>
-                한 번의 업로드, 수많은 가능성의 제안.
-              </div>
-            )}
+            </div>
           </div>
         </div>
 
