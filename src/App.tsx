@@ -1098,20 +1098,18 @@ const App: React.FC = () => {
   };
 
   const handleTaskSuggestionMouseDown = (e: React.MouseEvent) => {
-    if (e.target instanceof HTMLElement && e.target.closest('.task-suggestions-section')) {
-      setIsDraggingTaskSuggestion(true);
-      const rect = taskSuggestionRef.current?.getBoundingClientRect();
-      if (rect) {
-        setTaskSuggestionDragOffset({
-          x: e.clientX - rect.left,
-          y: e.clientY - rect.top
-        });
-      }
-    }
+    e.preventDefault();
+    setIsDraggingTaskSuggestion(true);
+    const rect = e.currentTarget.getBoundingClientRect();
+    setTaskSuggestionDragOffset({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    });
   };
 
   const handleTaskSuggestionMouseMove = (e: MouseEvent) => {
-    if (isDraggingTaskSuggestion && taskSuggestionRef.current) {
+    if (isDraggingTaskSuggestion) {
+      e.preventDefault();
       const x = e.clientX - taskSuggestionDragOffset.x;
       const y = e.clientY - taskSuggestionDragOffset.y;
       setTaskSuggestionPosition({ x, y });
@@ -1465,13 +1463,14 @@ const App: React.FC = () => {
               padding: '0 20px 20px 20px', 
               borderRadius: '8px',
               zIndex: 1000,
-              cursor: 'move',
               textAlign: 'left',
               width: '455px',
               maxHeight: '300px',
               marginTop: '80px',
               marginLeft: '22px',
-              overflow: 'visible'
+              overflow: 'visible',
+              cursor: 'move',
+              userSelect: 'none'
             }}>
             <div style={{ position: 'relative' }}>
               <h3 style={{ 
@@ -1543,7 +1542,7 @@ const App: React.FC = () => {
                     ))}
                   </div>
                 ) : (
-                  <div style={{ color: '#666' }}>
+                  <div style={{ textAlign: 'center', marginTop: '30px', fontSize: '20px', color: '#666' }}>
                     한 번의 업로드, 수많은 가능성의 제안.
                   </div>
                 )}
