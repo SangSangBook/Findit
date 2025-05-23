@@ -1776,16 +1776,23 @@ const App: React.FC = () => {
                       const bbox = obj.bbox;
                       const isNormalized = bbox.x1 <= 1 && bbox.x2 <= 1 && bbox.y1 <= 1 && bbox.y2 <= 1;
                       let x: number, y: number, width: number, height: number;
+                      
                       if (isNormalized) {
                         x = bbox.x1 * modalImageRef.current!.width;
                         y = bbox.y1 * modalImageRef.current!.height;
                         width = (bbox.x2 - bbox.x1) * modalImageRef.current!.width;
                         height = (bbox.y2 - bbox.y1) * modalImageRef.current!.height;
                       } else {
-                        x = bbox.x1;
-                        y = bbox.y1;
-                        width = bbox.x2 - bbox.x1;
-                        height = bbox.y2 - bbox.y1;
+                        // 원본 이미지와 모달 이미지의 비율 계산
+                        const originalWidth = imageRef.current?.width || 1;
+                        const originalHeight = imageRef.current?.height || 1;
+                        const scaleX = modalImageRef.current!.width / originalWidth;
+                        const scaleY = modalImageRef.current!.height / originalHeight;
+                        
+                        x = bbox.x1 * scaleX;
+                        y = bbox.y1 * scaleY;
+                        width = (bbox.x2 - bbox.x1) * scaleX;
+                        height = (bbox.y2 - bbox.y1) * scaleY;
                       }
 
                       return (

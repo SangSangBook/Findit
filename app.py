@@ -378,8 +378,12 @@ def extract_text_with_vision(image_path):
         if image is None:
             raise ValueError(f"Could not read image: {image_path}")
 
+        # 원본 이미지 크기 저장
+        original_height, original_width = image.shape[:2]
+        
         # 이미지 크기 조정 (너무 작거나 큰 경우)
         height, width = image.shape[:2]
+        scale = 1.0
         
         if width > 2000 or height > 2000:
             scale = min(2000/width, 2000/height)
@@ -455,34 +459,28 @@ def extract_text_with_vision(image_path):
                 # 전체 텍스트를 하나의 블록으로 처리
                 full_text = response['textAnnotations'][0]['description'] if response['textAnnotations'] else ""
                 
-                # 텍스트를 문장 단위로 분리
-                sentences = []
-                current_sentence = ""
-                
-                for char in full_text:
-                    if char in ['\n', ' ']:
-                        if current_sentence:
-                            sentences.append(current_sentence)
-                            current_sentence = ""
-                    else:
-                        current_sentence += char
-                
-                if current_sentence:
-                    sentences.append(current_sentence)
-                
-                # 각 문장을 텍스트 블록으로 추가
-                for sentence in sentences:
-                    if sentence.strip():  # 빈 문장 제외
-                        text_blocks.append({
-                            'text': sentence.strip(),
-                            'bbox': {
-                                'x1': 0,
-                                'y1': 0,
-                                'x2': width,
-                                'y2': height
-                            },
-                            'confidence': 1.0
-                        })
+                # 각 텍스트 블록의 좌표 정보 처리
+                for text_annotation in response['textAnnotations'][1:]:  # 첫 번째는 전체 텍스트이므로 건너뛰기
+                    vertices = text_annotation['boundingPoly']['vertices']
+                    x_coords = [vertex.get('x', 0) for vertex in vertices]
+                    y_coords = [vertex.get('y', 0) for vertex in vertices]
+                    
+                    # 정규화된 좌표를 원본 이미지 크기로 변환하고 scale 적용
+                    x1 = min(x_coords) / scale
+                    y1 = min(y_coords) / scale
+                    x2 = max(x_coords) / scale
+                    y2 = max(y_coords) / scale
+                    
+                    text_blocks.append({
+                        'text': text_annotation['description'],
+                        'bbox': {
+                            'x1': x1,
+                            'y1': y1,
+                            'x2': x2,
+                            'y2': y2
+                        },
+                        'confidence': text_annotation.get('confidence', 1.0)
+                    })
             
             # 객체 검출 결과 처리
             if 'localizedObjectAnnotations' in response:
@@ -493,10 +491,11 @@ def extract_text_with_vision(image_path):
                     x_coords = [vertex.get('x', 0) for vertex in vertices]
                     y_coords = [vertex.get('y', 0) for vertex in vertices]
                     
-                    x1 = min(x_coords)
-                    y1 = min(y_coords)
-                    x2 = max(x_coords)
-                    y2 = max(y_coords)
+                    # 정규화된 좌표를 원본 이미지 크기로 변환하고 scale 적용
+                    x1 = min(x_coords) * original_width / scale
+                    y1 = min(y_coords) * original_height / scale
+                    x2 = max(x_coords) * original_width / scale
+                    y2 = max(y_coords) * original_height / scale
                     
                     detected_objects.append({
                         'text': obj['name'],
