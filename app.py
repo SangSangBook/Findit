@@ -768,7 +768,7 @@ def process_video(video_path, query, mode='normal', session_id=None):
                                         'text': text,
                                         'bbox': bbox,
                                         'confidence': 1.0,  # 기본값 설정
-                                        'color': 'yellow'  # 연관어는 노란색
+                                        'color': '#000000'  # 기본 텍스트 색상
                                     })
                                     break
                         else:
@@ -1770,28 +1770,36 @@ def download_youtube_video(url):
             
             # yt-dlp 옵션 설정
             ydl_opts = {
-                'format': 'best[height<=480]',  # 480p 이하의 최상의 품질로 변경
+                'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]',  # 더 유연한 포맷 선택
                 'outtmpl': filepath,
                 'quiet': False,
                 'no_warnings': False,
                 'extract_flat': False,
                 'noplaylist': True,
-                'verbose': True
+                'verbose': True,
+                'merge_output_format': 'mp4',  # 출력 포맷을 mp4로 강제
+                'postprocessors': [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4',
+                }]
             }
             
             print("영상 정보 다운로드 중...")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 # 영상 정보 가져오기
+                print("영상 메타데이터 추출 중...")
                 info = ydl.extract_info(url, download=False)
                 title = info.get('title', '')
                 duration = info.get('duration', 0)
                 
                 print(f"영상 제목: {title}")
                 print(f"영상 길이: {duration}초")
+                print(f"다운로드 가능한 포맷: {info.get('formats', [])}")
                 
                 # 영상 다운로드
                 print("다운로드 시작...")
                 ydl.download([url])
+                print("다운로드 완료")
             
             # 파일 존재 확인
             if not os.path.exists(filepath):
