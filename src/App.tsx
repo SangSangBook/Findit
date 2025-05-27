@@ -389,7 +389,7 @@ const App: React.FC = () => {
   };
 
   const handleSearch = async (mode: 'normal' | 'smart') => {
-    if (!searchTerm || !selectedMedia || !sessionId) {
+    if (!searchTerm || !sessionId) {
       setDetectedObjects([]);
       setNoResults(false);
       setSearchResultPages([]);
@@ -404,9 +404,6 @@ const App: React.FC = () => {
     console.log('현재 페이지:', currentPage);
 
     try {
-      const cachedResult = ocrCache.get(selectedMedia.id);
-      console.log('캐시된 OCR 결과:', cachedResult);
-      
       const formData = new FormData();
       formData.append('session_id', sessionId);
       formData.append('query', searchTerm);
@@ -414,12 +411,25 @@ const App: React.FC = () => {
       formData.append('detect_objects', 'true');
       formData.append('perform_ocr', 'true');
       formData.append('detect_text', 'true');
-      
-      if (cachedResult) {
-        formData.append('ocr_text', cachedResult.text);
-        formData.append('detected_objects', JSON.stringify(cachedResult.objects));
+
+      // 모든 이미지의 캐시된 OCR 결과를 수집
+      const allCachedResults = mediaItems.map((item, index) => {
+        const cached = ocrCache.get(item.id);
+        return {
+          index,
+          text: cached?.text || '',
+          objects: cached?.objects || []
+        };
+      });
+
+      // 캐시된 결과가 있는 경우
+      if (allCachedResults.some(result => result.text || result.objects.length > 0)) {
+        formData.append('cached_results', JSON.stringify(allCachedResults));
       } else {
-        formData.append('images[]', selectedMedia.file);
+        // 캐시된 결과가 없는 경우 모든 이미지 파일 전송
+        mediaItems.forEach((item, index) => {
+          formData.append('images[]', item.file);
+        });
       }
 
       const response = await fetch('http://localhost:5001/analyze-image', {
@@ -433,106 +443,101 @@ const App: React.FC = () => {
       }
 
       const data = await response.json();
-      console.log('=== 서버 응답 데이터 ===');
-      console.log('OCR 텍스트:', data.ocr_text);
-      console.log('감지된 객체:', data.detected_objects);
-      console.log('매칭된 텍스트:', data.matches);
-      console.log('전체 데이터:', JSON.stringify(data, null, 2));
+      console.log('검색 결과:', data);
 
-      if (data.ocr_text && data.objects && !cachedResult) {
-        setOcrCache(prev => new Map(prev).set(selectedMedia.id, {
-          text: data.ocr_text,
-          objects: data.objects
-        }));
-      }
-      
       const allResults: DetectedObject[] = [];
-      
-      if (data.matches && data.matches.length > 0) {
-        const textResults = data.matches
-          .filter((obj: any) => {
-            const searchTermLower = searchTerm.toLowerCase();
-            const textLower = obj.text.toLowerCase();
-            
-            // 정확한 단어 매칭
-            const isExactMatch = textLower === searchTermLower;
-            
-            // 부분 문자열 매칭
-            const isPartialMatch = textLower.includes(searchTermLower) || searchTermLower.includes(textLower);
-            
-            // 단어 단위 매칭
-            const words = textLower.split(/\s+/);
-            const isWordMatch = words.some((word: string) => 
-              word === searchTermLower || 
-              word.includes(searchTermLower) || 
-              searchTermLower.includes(word)
-            );
-            
-            return isExactMatch || isPartialMatch || isWordMatch;
-          })
-          .map((obj: any) => ({
-            text: obj.text,
-            bbox: obj.bbox,
-            confidence: obj.confidence,
-            pageIndex: obj.pageIndex || currentPage,
-            match_type: 'text',
-            isObject: false
-          }));
-        allResults.push(...textResults);
-      }
-      
-      if (data.detected_objects && data.detected_objects.length > 0) {
-        const objectResults = data.detected_objects
-          .filter((obj: any) => {
-            const objectName = (obj.name || obj.text || '').toLowerCase();
-            const searchTermLower = searchTerm.toLowerCase();
-            
-            // 한글 검색어인 경우
-            if (/[가-힣]/.test(searchTerm)) {
-              // 직접 매칭
-              if (objectName.includes(searchTermLower)) return true;
-              
-              // 한영 매핑 확인
-              const koreanMatches = koreanToEnglish[searchTermLower] || [];
-              return koreanMatches.some(english => objectName.includes(english.toLowerCase()));
+      const resultPages: number[] = [];
+
+      // 검색 결과 처리
+      if (data.results) {
+        data.results.forEach((result: any, index: number) => {
+          if (result.matches && result.matches.length > 0) {
+            const textResults = result.matches
+              .filter((obj: any) => {
+                const searchTermLower = searchTerm.toLowerCase();
+                const textLower = obj.text.toLowerCase();
+                
+                const isExactMatch = textLower === searchTermLower;
+                const isPartialMatch = textLower.includes(searchTermLower) || searchTermLower.includes(textLower);
+                const words = textLower.split(/\s+/);
+                const isWordMatch = words.some((word: string) => 
+                  word === searchTermLower || 
+                  word.includes(searchTermLower) || 
+                  searchTermLower.includes(word)
+                );
+                
+                return isExactMatch || isPartialMatch || isWordMatch;
+              })
+              .map((obj: any) => ({
+                text: obj.text,
+                bbox: obj.bbox,
+                confidence: obj.confidence,
+                pageIndex: index,
+                match_type: 'text',
+                isObject: false
+              }));
+            allResults.push(...textResults);
+            if (!resultPages.includes(index)) {
+              resultPages.push(index);
             }
-            
-            // 영문 검색어인 경우
-            if (/[a-zA-Z]/.test(searchTerm)) {
-              // 직접 매칭
-              if (objectName.includes(searchTermLower)) return true;
-              
-              // 영한 매핑 확인
-              const englishMatches = englishToKorean[objectName] || [];
-              return englishMatches.some(korean => searchTermLower.includes(korean));
+          }
+
+          if (result.detected_objects && result.detected_objects.length > 0) {
+            const objectResults = result.detected_objects
+              .filter((obj: any) => {
+                const objectName = (obj.name || obj.text || '').toLowerCase();
+                const searchTermLower = searchTerm.toLowerCase();
+                
+                if (/[가-힣]/.test(searchTerm)) {
+                  if (objectName.includes(searchTermLower)) return true;
+                  const koreanMatches = koreanToEnglish[searchTermLower] || [];
+                  return koreanMatches.some(english => objectName.includes(english.toLowerCase()));
+                }
+                
+                if (/[a-zA-Z]/.test(searchTerm)) {
+                  if (objectName.includes(searchTermLower)) return true;
+                  const englishMatches = englishToKorean[objectName] || [];
+                  return englishMatches.some(korean => searchTermLower.includes(korean));
+                }
+                
+                return false;
+              })
+              .map((obj: any) => ({
+                text: obj.name || obj.text,
+                bbox: obj.bbox,
+                confidence: obj.confidence,
+                pageIndex: index,
+                match_type: 'object',
+                isObject: true
+              }));
+            allResults.push(...objectResults);
+            if (!resultPages.includes(index)) {
+              resultPages.push(index);
             }
-            
-            return false;
-          })
-          .map((obj: any) => ({
-            text: obj.name || obj.text,
-            bbox: obj.bbox,
-            confidence: obj.confidence,
-            pageIndex: obj.pageIndex || currentPage,
-            match_type: 'object',
-            isObject: true
-          }));
-        allResults.push(...objectResults);
+          }
+
+          // OCR 결과 캐시 업데이트
+          if (result.ocr_text && result.objects) {
+            setOcrCache(prev => new Map(prev).set(mediaItems[index].id, {
+              text: result.ocr_text,
+              objects: result.objects
+            }));
+          }
+        });
       }
       
       if (allResults.length > 0) {
+        console.log('검색 결과 발견:', allResults);
         setDetectedObjects(allResults);
         setNoResults(false);
-        
-        // 검색 결과가 있는 페이지 목록 업데이트
-        const pages = Array.from(new Set(allResults.map(obj => obj.pageIndex).filter((page): page is number => page !== undefined)));
-        setSearchResultPages(pages);
+        setSearchResultPages(resultPages);
         
         // 현재 페이지에 결과가 있는지 확인
         const hasResultsOnCurrentPage = allResults.some(obj => obj.pageIndex === currentPage);
+        
         if (!hasResultsOnCurrentPage) {
           // 현재 페이지에 결과가 없으면 첫 번째 결과가 있는 페이지로 이동
-          const firstResultPage = pages[0];
+          const firstResultPage = resultPages[0];
           if (firstResultPage !== undefined) {
             handlePageChange(firstResultPage);
             const targetMedia = mediaItems[firstResultPage];
@@ -543,10 +548,21 @@ const App: React.FC = () => {
               setSelectedImageType(targetMedia.imageType);
             }
           }
+        } else {
+          // 현재 페이지에 결과가 있으면 이전/다음 페이지 알림 설정
+          const prevPage = resultPages.find(p => p < currentPage);
+          const nextPage = resultPages.find(p => p > currentPage);
+          
+          if (prevPage !== undefined) {
+            setPageNotification({ show: true, direction: 'prev' });
+          } else if (nextPage !== undefined) {
+            setPageNotification({ show: true, direction: 'next' });
+          } else {
+            setPageNotification({ show: false, direction: null });
+          }
         }
-        
-        setPageNotification({ show: false, direction: null });
       } else {
+        console.log('검색 결과 없음');
         setDetectedObjects([]);
         setNoResults(true);
         setSearchResultPages([]);
@@ -934,18 +950,27 @@ const App: React.FC = () => {
 
   const handlePageChange = (newPage: number) => {
     setCurrentPage(newPage);
-    if (searchResultPages.length > 0) {
-      const nextPage = searchResultPages.find(p => p > newPage);
-      const prevPage = searchResultPages.find(p => p < newPage);
-      
-      if (nextPage) {
-        setPageNotification({ show: true, direction: 'next' });
-      } else if (prevPage) {
-        setPageNotification({ show: true, direction: 'prev' });
-      } else {
-        setPageNotification({ show: false, direction: null });
-      }
+    
+    // 검색 결과가 있는 페이지 목록에서 현재 페이지의 위치 확인
+    const currentIndex = searchResultPages.indexOf(newPage);
+    
+    // 이전/다음 페이지에 결과가 있는지 확인
+    const hasPrevResults = searchResultPages.some(page => page < newPage);
+    const hasNextResults = searchResultPages.some(page => page > newPage);
+    
+    // 알림 상태 업데이트
+    if (hasPrevResults) {
+      setPageNotification({ show: true, direction: 'prev' });
+    } else if (hasNextResults) {
+      setPageNotification({ show: true, direction: 'next' });
+    } else {
+      setPageNotification({ show: false, direction: null });
     }
+    
+    // 3초 후 알림 자동 숨김
+    setTimeout(() => {
+      setPageNotification({ show: false, direction: null });
+    }, 3000);
   };
 
   const handlePrevPage = () => {
@@ -1325,8 +1350,23 @@ const App: React.FC = () => {
                       <i className="fas fa-chevron-left"></i>
                     </button>
                     {pageNotification.show && pageNotification.direction === 'prev' && (
-                      <div className="page-notification left">
-                        이전 페이지에 있는 결과에요!
+                      <div className="page-notification" style={{
+                        position: 'fixed',
+                        left: '50%',
+                        top: '20px',
+                        transform: 'translateX(-50%)',
+                        backgroundColor: 'rgba(0, 123, 255, 0.9)',
+                        color: 'white',
+                        padding: '10px 20px',
+                        borderRadius: '5px',
+                        fontSize: '14px',
+                        whiteSpace: 'nowrap',
+                        zIndex: 9999,
+                        boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
+                        animation: 'fadeIn 0.3s ease-in-out'
+                      }}>
+                        <i className="fas fa-arrow-left" style={{ marginRight: '8px' }}></i>
+                        이전 페이지에 있는 단어에요!
                       </div>
                     )}
                   </div>
@@ -1383,8 +1423,23 @@ const App: React.FC = () => {
                       <i className="fas fa-chevron-right"></i>
                     </button>
                     {pageNotification.show && pageNotification.direction === 'next' && (
-                      <div className="page-notification right">
-                        다음 페이지에 있는 결과에요!
+                      <div className="page-notification" style={{
+                        position: 'fixed',
+                        left: '50%',
+                        top: '20px',
+                        transform: 'translateX(-50%)',
+                        backgroundColor: 'rgba(0, 123, 255, 0.9)',
+                        color: 'white',
+                        padding: '10px 20px',
+                        borderRadius: '5px',
+                        fontSize: '14px',
+                        whiteSpace: 'nowrap',
+                        zIndex: 9999,
+                        boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
+                        animation: 'fadeIn 0.3s ease-in-out'
+                      }}>
+                        다음 페이지에 있는 단어에요!
+                        <i className="fas fa-arrow-right" style={{ marginLeft: '8px' }}></i>
                       </div>
                     )}
                   </div>
