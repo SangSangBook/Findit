@@ -1777,22 +1777,31 @@ const App: React.FC = () => {
                       const isNormalized = bbox.x1 <= 1 && bbox.x2 <= 1 && bbox.y1 <= 1 && bbox.y2 <= 1;
                       let x: number, y: number, width: number, height: number;
                       
+                      // 이미지의 실제 표시 크기와 원본 크기 계산
+                      const displayWidth = modalImageRef.current!.width;
+                      const displayHeight = modalImageRef.current!.height;
+                      const originalWidth = imageRef.current?.naturalWidth || 1;
+                      const originalHeight = imageRef.current?.naturalHeight || 1;
+                      
+                      // 이미지의 실제 표시 영역 계산 (object-fit: contain 고려)
+                      const scale = Math.min(displayWidth / originalWidth, displayHeight / originalHeight);
+                      const scaledWidth = originalWidth * scale;
+                      const scaledHeight = originalHeight * scale;
+                      const offsetX = (displayWidth - scaledWidth) / 2;
+                      const offsetY = (displayHeight - scaledHeight) / 2;
+                      
                       if (isNormalized) {
-                        x = bbox.x1 * modalImageRef.current!.width;
-                        y = bbox.y1 * modalImageRef.current!.height;
-                        width = (bbox.x2 - bbox.x1) * modalImageRef.current!.width;
-                        height = (bbox.y2 - bbox.y1) * modalImageRef.current!.height;
+                        // 정규화된 좌표를 실제 표시 크기로 변환
+                        x = bbox.x1 * scaledWidth + offsetX;
+                        y = bbox.y1 * scaledHeight + offsetY;
+                        width = (bbox.x2 - bbox.x1) * scaledWidth;
+                        height = (bbox.y2 - bbox.y1) * scaledHeight;
                       } else {
-                        // 원본 이미지와 모달 이미지의 비율 계산
-                        const originalWidth = imageRef.current?.width || 1;
-                        const originalHeight = imageRef.current?.height || 1;
-                        const scaleX = modalImageRef.current!.width / originalWidth;
-                        const scaleY = modalImageRef.current!.height / originalHeight;
-                        
-                        x = bbox.x1 * scaleX;
-                        y = bbox.y1 * scaleY;
-                        width = (bbox.x2 - bbox.x1) * scaleX;
-                        height = (bbox.y2 - bbox.y1) * scaleY;
+                        // 비정규화된 좌표를 실제 표시 크기로 변환
+                        x = (bbox.x1 * scale) + offsetX;
+                        y = (bbox.y1 * scale) + offsetY;
+                        width = (bbox.x2 - bbox.x1) * scale;
+                        height = (bbox.y2 - bbox.y1) * scale;
                       }
 
                       return (
