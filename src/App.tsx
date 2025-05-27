@@ -133,8 +133,14 @@ const App: React.FC = () => {
     
     setIsTaskSuggesting(true);
     try {
+      // 모든 이미지의 OCR 텍스트를 결합
+      const allOcrText = mediaItems
+        .map(item => item.ocrText)
+        .filter(text => text)
+        .join('\n\n');
+
       const requestData = {
-        text: text,
+        text: allOcrText || text, // 모든 이미지의 텍스트가 있으면 사용, 없으면 전달받은 텍스트 사용
         type: 'task_suggestion'
       };
       console.log('요청 데이터:', requestData);
@@ -271,6 +277,10 @@ const App: React.FC = () => {
           formData.append('images[]', files[i]);
         }
         formData.append('mode', 'normal');
+        
+        if (sessionId) {
+          formData.append('session_id', sessionId);
+        }
 
         const response = await fetch('http://localhost:5001/upload-image', {
           method: 'POST',
@@ -289,17 +299,8 @@ const App: React.FC = () => {
         console.log('=== 서버 응답 데이터 ===');
         console.log('업로드 성공:', data);
 
-        if (!sessionId) {
+        if (data.session_id) {
           setSessionId(data.session_id);
-        }
-
-        if (data.text) {
-          console.log('=== OCR 텍스트 추출 완료 ===');
-          console.log('OCR 텍스트:', data.text);
-          setOcrText(data.text);
-          
-          console.log('=== 태스크 제안 시작 ===');
-          await getTaskSuggestions(data.text);
         }
 
         if (data.image_type) {
@@ -314,11 +315,10 @@ const App: React.FC = () => {
             type: 'image',
             url,
             file,
-            sessionId: sessionId || data.session_id,
+            sessionId: data.session_id || sessionId,
             imageType: data.image_type as ImageType
           };
 
-          // 각 이미지에 대해 OCR과 객체 인식 결과 가져오기
           const imageFormData = new FormData();
           imageFormData.append('images[]', file);
           imageFormData.append('session_id', mediaItem.sessionId!);
@@ -336,30 +336,38 @@ const App: React.FC = () => {
             const imageData = await imageResponse.json();
             mediaItem.ocrText = imageData.ocr_text;
             mediaItem.detectedObjects = imageData.detected_objects;
+            
+            if (imageData.ocr_text && imageData.detected_objects) {
+              setOcrCache(prev => new Map(prev).set(mediaItem.id, {
+                text: imageData.ocr_text,
+                objects: imageData.detected_objects
+              }));
+            }
           }
 
           return mediaItem;
         }));
 
-        // 이미지 순서를 백엔드의 인식 순서와 맞추기 위해 역순으로 정렬
         newMediaItems.reverse();
 
         setMediaItems(prev => {
-          // 기존 이미지들을 유지하면서 새로운 이미지들을 앞에 추가
           const updatedItems = [...newMediaItems, ...prev];
-          setCurrentPage(0); // 첫 번째 이미지(사과)를 보여주도록 설정
+          setCurrentPage(0);
           return updatedItems;
         });
 
-        // 첫 번째 이미지(사과)를 선택
         const firstMediaItem = newMediaItems[0];
         setSelectedMedia(firstMediaItem);
         setMediaType('image');
         setMediaUrl(firstMediaItem.url);
         
-        // 마지막 이미지에 대한 태스크 제안
-        if (firstMediaItem.ocrText) {
-          await getTaskSuggestions(firstMediaItem.ocrText);
+        const allOcrText = newMediaItems
+          .map(item => item.ocrText)
+          .filter(text => text)
+          .join('\n\n');
+        
+        if (allOcrText) {
+          await getTaskSuggestions(allOcrText);
         }
       }
 
@@ -730,20 +738,30 @@ const App: React.FC = () => {
       formData.append('session_id', selectedMedia.sessionId!);
       formData.append('message', chatMessage);
       
-      // 현재 페이지의 이미지 데이터 사용
-      const currentMedia = mediaItems[currentPage];
-      
-      // OCR 텍스트가 있으면 우선적으로 사용
-      if (currentMedia && currentMedia.ocrText) {
-        console.log('OCR 텍스트 사용:', currentMedia.ocrText);
-        formData.append('ocr_text', currentMedia.ocrText);
-        formData.append('use_ocr', 'true'); // OCR 텍스트 사용 명시
+      // 모든 이미지의 OCR 텍스트와 객체 인식 결과를 결합
+      const allOcrText = mediaItems
+        .map(item => item.ocrText)
+        .filter(text => text)
+        .join('\n\n');
+
+      const allDetectedObjects = mediaItems
+        .flatMap(item => item.detectedObjects || [])
+        .map(obj => ({
+          ...obj,
+          pageIndex: mediaItems.findIndex(item => 
+            item.detectedObjects?.some(dObj => dObj === obj)
+          )
+        }));
+
+      if (allOcrText) {
+        console.log('모든 이미지의 OCR 텍스트 사용:', allOcrText);
+        formData.append('ocr_text', allOcrText);
+        formData.append('use_ocr', 'true');
       }
       
-      // 객체 인식 결과가 있으면 추가
-      if (currentMedia && currentMedia.detectedObjects && currentMedia.detectedObjects.length > 0) {
-        console.log('객체 인식 결과 사용:', currentMedia.detectedObjects);
-        formData.append('detected_objects', JSON.stringify(currentMedia.detectedObjects));
+      if (allDetectedObjects.length > 0) {
+        console.log('모든 이미지의 객체 인식 결과 사용:', allDetectedObjects);
+        formData.append('detected_objects', JSON.stringify(allDetectedObjects));
       }
       
       const response = await fetch('http://localhost:5001/summarize', {
