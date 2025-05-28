@@ -23,6 +23,7 @@ import googlemaps
 import yt_dlp
 import json
 import sys
+from multiprocessing import Pool
 
 # src 디렉토리를 Python 경로에 추가
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
@@ -672,10 +673,50 @@ def extract_frames_from_video(video_path, interval=2.0, max_frames=None):
     cap.release()
     return frames, timestamps
 
+def process_frame_chunk(chunk_data):
+    chunk_results = []
+    for frame, timestamp in chunk_data:
+        # 프레임을 임시 이미지 파일로 저장
+        temp_frame_path = os.path.join(UPLOAD_FOLDER, f'temp_frame_{timestamp}.jpg')
+        cv2.imwrite(temp_frame_path, frame)
+        
+        try:
+            # OCR 실행
+            text_blocks, detected_objects = extract_text_with_vision(temp_frame_path)
+            
+            if text_blocks:
+                # 현재 프레임의 OCR 텍스트 저장
+                frame_text = '\n'.join([block['text'] for block in text_blocks])
+                
+                # 한 글자씩 분리된 텍스트를 문장으로 결합
+                combined_text = ''
+                current_sentence = ''
+                for char in frame_text:
+                    if char in ['\n', ' ']:
+                        if current_sentence:
+                            combined_text += current_sentence + char
+                            current_sentence = ''
+                    else:
+                        current_sentence += char
+                if current_sentence:
+                    combined_text += current_sentence
+                
+                chunk_results.append((timestamp, combined_text, text_blocks))
+        except Exception as e:
+            print(f"프레임 처리 중 오류 발생: {str(e)}")
+        finally:
+            # 임시 파일 삭제
+            if os.path.exists(temp_frame_path):
+                os.remove(temp_frame_path)
+    
+    return chunk_results
+
 def process_video(video_path, query, mode='normal', session_id=None):
     """비디오 처리 및 타임라인 생성"""
     print(f"비디오 처리 시작: {video_path}")
     print(f"세션 ID: {session_id}")
+    print(f"검색 모드: {mode}")
+    print(f"검색어: {query}")
     
     # 비디오 정보 가져오기
     cap = cv2.VideoCapture(video_path)
@@ -685,115 +726,100 @@ def process_video(video_path, query, mode='normal', session_id=None):
     cap.release()
     
     # 비디오 길이에 따라 최대 프레임 수 조정
-    max_frames = min(50, duration)  # 최대 50프레임 또는 1초당 1프레임
-    frames, timestamps = extract_frames_from_video(video_path, interval=2.0, max_frames=max_frames)
+    max_frames = min(30, duration)  # 최대 30프레임으로 제한
+    frames, timestamps = extract_frames_from_video(video_path, interval=3.0, max_frames=max_frames)  # 3초 간격으로 변경
     
     timeline_results = []
     all_ocr_text = []  # 모든 OCR 텍스트를 저장할 리스트
+    related_words = [query]  # 기본 검색어 추가
     
     if mode == 'smart':
-        # 연관어 검색을 위한 GPT 프롬프트
-        prompt = f"""
-        '{query}'와 관련된 동의어, 상위어, 하위어, 연관어를 찾아주세요.
-        예시:
-        - 동의어: 같은 의미의 단어
-        - 상위어: 더 넓은 범주의 단어
-        - 하위어: 더 구체적인 단어
-        - 연관어: 관련이 있는 단어
-        
-        결과는 쉼표로 구분된 단어 목록으로 반환해주세요.
-        """
-        
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "당신은 전문적인 언어 분석가입니다."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=100
-        )
-        
-        related_words = response.choices[0].message.content.strip().split(',')
-        related_words = [word.strip() for word in related_words]
-        related_words.append(query)  # 원래 검색어도 포함
-        
-        print(f"연관어 목록: {related_words}")
-    
-    # 배치 처리할 프레임 수 증가
-    batch_size = 10  # 배치 크기를 10으로 증가
-    for i in range(0, len(frames), batch_size):
-        batch_frames = frames[i:i+batch_size]
-        batch_timestamps = timestamps[i:i+batch_size]
-        
-        # 배치로 OCR 처리
-        batch_results = []
-        for frame, timestamp in zip(batch_frames, batch_timestamps):
-            # 프레임을 임시 이미지 파일로 저장
-            temp_frame_path = os.path.join(UPLOAD_FOLDER, f'temp_frame_{timestamp}.jpg')
-            cv2.imwrite(temp_frame_path, frame)
+        try:
+            # 연관어 검색을 위한 GPT 프롬프트
+            prompt = f"""
+            '{query}'와 관련된 동의어, 상위어, 하위어, 연관어를 찾아주세요.
+            예시:
+            - 동의어: 같은 의미의 단어
+            - 상위어: 더 넓은 범주의 단어 (예: '앵무새'의 상위어는 '조류', '동물')
+            - 하위어: 더 구체적인 단어 (예: '조류'의 하위어는 '앵무새', '참새', '독수리')
+            - 연관어: 관련이 있는 단어
             
-            try:
-                # OCR 실행 (수정된 함수 사용)
-                text_blocks, detected_objects = extract_text_with_vision(temp_frame_path)
+            특히 동물이나 생물 관련 검색어의 경우, 같은 종류의 다른 동물들도 포함해주세요.
+            예를 들어 '앵무새'로 검색하면 '조류', '동물'과 함께 '참새', '독수리', '까치' 등도 포함해주세요.
+            
+            결과는 쉼표로 구분된 단어 목록으로 반환해주세요.
+            """
+            
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "당신은 전문적인 언어 분석가입니다. 특히 동물이나 생물 관련 검색어의 경우, 같은 종류의 다른 동물들도 포함하여 연관어를 찾아주세요."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=100
+            )
+            
+            # 연관어 목록 파싱 및 정리
+            words = response.choices[0].message.content.strip().split(',')
+            related_words = [word.strip() for word in words if word.strip()]
+            related_words.append(query)  # 원래 검색어도 포함
+            
+            print(f"연관어 목록: {related_words}")
+        except Exception as e:
+            print(f"연관어 검색 중 오류 발생: {str(e)}")
+            related_words = [query]  # 오류 발생 시 원래 검색어만 사용
+    
+    # 병렬 처리를 위한 멀티프로세싱 설정
+    num_processes = min(4, len(frames))  # 최대 4개의 프로세스 사용
+    chunk_size = max(1, len(frames) // num_processes)
+    
+    # 프레임을 청크로 나누기
+    frame_chunks = []
+    for i in range(0, len(frames), chunk_size):
+        chunk = list(zip(frames[i:i+chunk_size], timestamps[i:i+chunk_size]))
+        frame_chunks.append(chunk)
+    
+    # 멀티프로세싱으로 프레임 처리
+    with Pool(num_processes) as pool:
+        chunk_results = pool.map(process_frame_chunk, frame_chunks)
+    
+    # 결과 처리
+    for chunk_result in chunk_results:
+        for timestamp, combined_text, text_blocks in chunk_result:
+            all_ocr_text.append(f"=== {timestamp}초 ===\n{combined_text}")
+            
+            detected_texts = []
+            for block in text_blocks:
+                text = block['text']
+                bbox = block['bbox']
                 
-                if text_blocks:
-                    # 현재 프레임의 OCR 텍스트 저장
-                    frame_text = '\n'.join([block['text'] for block in text_blocks])
-                    
-                    # 한 글자씩 분리된 텍스트를 문장으로 결합
-                    combined_text = ''
-                    current_sentence = ''
-                    for char in frame_text:
-                        if char in ['\n', ' ']:
-                            if current_sentence:
-                                combined_text += current_sentence + char
-                                current_sentence = ''
-                        else:
-                            current_sentence += char
-                    if current_sentence:
-                        combined_text += current_sentence
-                    
-                    all_ocr_text.append(f"=== {timestamp}초 ===\n{combined_text}")
-                    
-                    detected_texts = []
-                    for block in text_blocks:
-                        text = block['text']
-                        bbox = block['bbox']
-                        
-                        if mode == 'smart':
-                            # 연관어 검색
-                            for word in related_words:
-                                if word.lower() in text.lower():
-                                    detected_texts.append({
-                                        'text': text,
-                                        'bbox': bbox,
-                                        'confidence': 1.0,  # 기본값 설정
-                                        'color': '#000000'  # 기본 텍스트 색상
-                                    })
-                                    break
-                        else:
-                            # 일반 검색
-                            if query.lower() in text.lower():
-                                detected_texts.append({
-                                    'text': text,
-                                    'bbox': bbox,
-                                    'confidence': 1.0,  # 기본값 설정
-                                    'color': 'red'  # 일반 검색은 빨간색
-                                })
-                    
-                    if detected_texts:
-                        batch_results.append({
-                            'timestamp': timestamp,
-                            'texts': detected_texts
+                if mode == 'smart':
+                    # 연관어 검색
+                    for word in related_words:
+                        if word.lower() in text.lower():
+                            detected_texts.append({
+                                'text': text,
+                                'bbox': bbox,
+                                'confidence': 1.0,
+                                'color': '#000000',
+                                'match_type': 'smart'
+                            })
+                            break
+                else:
+                    # 일반 검색
+                    if query.lower() in text.lower():
+                        detected_texts.append({
+                            'text': text,
+                            'bbox': bbox,
+                            'confidence': 1.0,
+                            'color': 'red'
                         })
-            except Exception as e:
-                print(f"프레임 처리 중 오류 발생: {str(e)}")
-            finally:
-                # 임시 파일 삭제
-                if os.path.exists(temp_frame_path):
-                    os.remove(temp_frame_path)
-        
-        timeline_results.extend(batch_results)
+            
+            if detected_texts:
+                timeline_results.append({
+                    'timestamp': timestamp,
+                    'texts': detected_texts
+                })
     
     # 전체 OCR 텍스트를 하나의 문자열로 결합
     ocr_text = '\n'.join(all_ocr_text)
@@ -1453,6 +1479,43 @@ def analyze_image():
             query_lower = query.lower()
             is_korean_query = any('\uAC00' <= char <= '\uD7A3' for char in query)
             
+            # 스마트 검색 모드일 때 연관어 검색
+            related_words = [query]
+            if mode == 'smart':
+                try:
+                    # 연관어 검색을 위한 GPT 프롬프트
+                    prompt = f"""
+                    '{query}'와 관련된 동의어, 상위어, 하위어, 연관어를 찾아주세요.
+                    특히 동물이나 생물 관련 검색어의 경우, 같은 종류의 다른 동물들도 포함해주세요.
+                    
+                    예시:
+                    - '동물'로 검색할 경우: '개', '고양이', '앵무새', '물고기', '새', '포유류', '조류', '어류' 등
+                    - '조류'로 검색할 경우: '앵무새', '참새', '독수리', '까치', '새' 등
+                    - '포유류'로 검색할 경우: '개', '고양이', '사자', '호랑이', '곰' 등
+                    - '어류'로 검색할 경우: '물고기', '상어', '고등어', '참치' 등
+                    
+                    결과는 쉼표로 구분된 단어 목록으로 반환해주세요.
+                    """
+                    
+                    response = client.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                            {"role": "system", "content": "당신은 전문적인 언어 분석가입니다. 특히 동물이나 생물 관련 검색어의 경우, 같은 종류의 다른 동물들도 포함하여 연관어를 찾아주세요. 검색어가 '동물', '조류', '포유류', '어류' 등 상위 개념인 경우, 그에 속하는 모든 하위 동물들도 포함해주세요."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        max_tokens=200
+                    )
+                    
+                    # 연관어 목록 파싱 및 정리
+                    words = response.choices[0].message.content.strip().split(',')
+                    related_words = [word.strip() for word in words if word.strip()]
+                    related_words.append(query)  # 원래 검색어도 포함
+                    
+                    print(f"연관어 목록: {related_words}")
+                except Exception as e:
+                    print(f"연관어 검색 중 오류 발생: {str(e)}")
+                    related_words = [query]  # 오류 발생 시 원래 검색어만 사용
+            
             # 한글 검색어인 경우 영어 매핑 가져오기
             korean_matches = []
             if is_korean_query:
@@ -1468,12 +1531,24 @@ def analyze_image():
                     # 직접 매칭 확인
                     direct_match = query_lower in text_lower
                     
+                    # 연관어 매칭 확인 (스마트 검색 모드)
+                    related_match = False
+                    if mode == 'smart':
+                        # 연관어 목록의 각 단어가 텍스트에 포함되어 있는지 확인
+                        for word in related_words:
+                            word_lower = word.lower()
+                            if word_lower in text_lower or text_lower in word_lower:
+                                related_match = True
+                                print(f"연관어 매칭 성공: '{word_lower}' in '{text_lower}'")
+                                break
+                    
                     # 한글-영어 매핑 확인
                     mapped_match = False
                     if is_korean_query:
                         mapped_match = any(english.lower() in text_lower for english in korean_matches)
                     
-                    if direct_match or mapped_match:
+                    if direct_match or related_match or mapped_match:
+                        print(f"매칭된 텍스트: {text} (직접 매칭: {direct_match}, 연관어 매칭: {related_match}, 매핑 매칭: {mapped_match})")
                         if item.get('match_type') == 'object':
                             all_detected_objects.append({
                                 'name': text,
@@ -1494,7 +1569,7 @@ def analyze_image():
                                     'whiteSpace': 'nowrap',
                                     'overflow': 'visible'
                                 },
-                                'label': text  # 텍스트 레이블을 별도로 추가
+                                'label': text
                             })
                         else:
                             matches.append({
@@ -1519,12 +1594,24 @@ def analyze_image():
                     # 직접 매칭 확인
                     direct_match = query_lower in text_lower
                     
+                    # 연관어 매칭 확인 (스마트 검색 모드)
+                    related_match = False
+                    if mode == 'smart':
+                        # 연관어 목록의 각 단어가 텍스트에 포함되어 있는지 확인
+                        for word in related_words:
+                            word_lower = word.lower()
+                            if word_lower in text_lower or text_lower in word_lower:
+                                related_match = True
+                                print(f"연관어 매칭 성공: '{word_lower}' in '{text_lower}'")
+                                break
+                    
                     # 한글-영어 매핑 확인
                     mapped_match = False
                     if is_korean_query:
                         mapped_match = any(english.lower() in text_lower for english in korean_matches)
                     
-                    if direct_match or mapped_match:
+                    if direct_match or related_match or mapped_match:
+                        print(f"매칭된 텍스트: {text} (직접 매칭: {direct_match}, 연관어 매칭: {related_match}, 매핑 매칭: {mapped_match})")
                         if data.get('match_type') == 'object':
                             all_detected_objects.append({
                                 'name': text,
@@ -1545,7 +1632,7 @@ def analyze_image():
                                     'whiteSpace': 'nowrap',
                                     'overflow': 'visible'
                                 },
-                                'label': text  # 텍스트 레이블을 별도로 추가
+                                'label': text
                             })
                         else:
                             matches.append({
@@ -1569,6 +1656,7 @@ def analyze_image():
             'ocr_text': ocr_text,
             'total_matches': len(matches),
             'total_objects': len(all_detected_objects),
+            'show_modal': len(matches) > 0 or len(all_detected_objects) > 0,  # 검색 결과가 있으면 모달 표시
             'styles': {
                 'overlay': {
                     'position': 'absolute',
@@ -1581,7 +1669,7 @@ def analyze_image():
                 },
                 'text': {
                     'position': 'absolute',
-                                    'color': '#ff0000',
+                    'color': '#ff0000',
                     'backgroundColor': 'rgba(255, 0, 0, 0.1)',
                     'borderRadius': '50%',
                     'border': '2px solid #ff0000',

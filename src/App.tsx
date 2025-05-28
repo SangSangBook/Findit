@@ -143,8 +143,12 @@ const App: React.FC = () => {
         .filter(text => text)
         .join('\n\n');
 
+      // 텍스트가 너무 길 경우 앞부분만 사용
+      const maxLength = 8000;
+      const truncatedText = (allOcrText || text).slice(0, maxLength);
+
       const requestData = {
-        text: allOcrText || text, // 모든 이미지의 텍스트가 있으면 사용, 없으면 전달받은 텍스트 사용
+        text: truncatedText,
         type: 'task_suggestion'
       };
       console.log('요청 데이터:', requestData);
@@ -223,6 +227,7 @@ const App: React.FC = () => {
         formData.append('video', file);
         formData.append('query', '');
         formData.append('mode', 'normal');
+        formData.append('fast_ocr', 'true'); // 빠른 OCR 처리 옵션 추가
         
         const response = await fetch('http://localhost:5001/upload-video', {
           method: 'POST',
@@ -585,8 +590,8 @@ const App: React.FC = () => {
   };
 
   const handleSummarize = async () => {
-    if (!sessionId) {
-      setError('이미지가 업로드되지 않았습니다');
+    if (!selectedMedia) {
+      setError('이미지가 선택되지 않았습니다');
       return;
     }
 
@@ -596,9 +601,11 @@ const App: React.FC = () => {
 
     try {
       const formData = new FormData();
-      formData.append('session_id', sessionId);
+      formData.append('session_id', selectedMedia.sessionId!);
+      formData.append('text', selectedMedia.ocrText || '');
+      formData.append('type', 'summary');
 
-      const response = await fetch('http://localhost:5001/summarize', {
+      const response = await fetch('http://localhost:5001/analyze-image', {
         method: 'POST',
         body: formData,
       });
