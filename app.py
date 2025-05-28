@@ -1581,7 +1581,7 @@ def analyze_image():
                 },
                 'text': {
                     'position': 'absolute',
-                    'color': '#ff0000',
+                                    'color': '#ff0000',
                     'backgroundColor': 'rgba(255, 0, 0, 0.1)',
                     'borderRadius': '50%',
                     'border': '2px solid #ff0000',

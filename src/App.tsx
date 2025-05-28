@@ -126,6 +126,10 @@ const App: React.FC = () => {
   const [isDraggingTaskSuggestion, setIsDraggingTaskSuggestion] = useState(false);
   const [taskSuggestionDragOffset, setTaskSuggestionDragOffset] = useState({ x: 0, y: 0 });
   const taskSuggestionRef = useRef<HTMLDivElement>(null);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<DetectedObject[]>([]);
 
   const getTaskSuggestions = async (text: string) => {
     console.log('=== 태스크 제안 시작 ===');
@@ -401,7 +405,6 @@ const App: React.FC = () => {
     console.log('검색어:', searchTerm);
     console.log('검색 모드:', mode);
     console.log('세션 ID:', sessionId);
-    console.log('현재 페이지:', currentPage);
 
     try {
       const formData = new FormData();
@@ -412,24 +415,9 @@ const App: React.FC = () => {
       formData.append('perform_ocr', 'true');
       formData.append('detect_text', 'true');
 
-      // 모든 이미지의 캐시된 OCR 결과를 수집
-      const allCachedResults = mediaItems.map((item, index) => {
-        const cached = ocrCache.get(item.id);
-        return {
-          index,
-          text: cached?.text || '',
-          objects: cached?.objects || []
-        };
-      });
-
-      // 캐시된 결과가 있는 경우
-      if (allCachedResults.some(result => result.text || result.objects.length > 0)) {
-        formData.append('cached_results', JSON.stringify(allCachedResults));
-      } else {
-        // 캐시된 결과가 없는 경우 모든 이미지 파일 전송
-        mediaItems.forEach((item, index) => {
-          formData.append('images[]', item.file);
-        });
+      // 현재 선택된 이미지 파일 전송
+      if (selectedMedia) {
+        formData.append('images[]', selectedMedia.file);
       }
 
       const response = await fetch('http://localhost:5001/analyze-image', {
@@ -445,128 +433,16 @@ const App: React.FC = () => {
       const data = await response.json();
       console.log('검색 결과:', data);
 
-      const allResults: DetectedObject[] = [];
-      const resultPages: number[] = [];
-
-      // 검색 결과 처리
-      if (data.results) {
-        data.results.forEach((result: any, index: number) => {
-          if (result.matches && result.matches.length > 0) {
-            const textResults = result.matches
-              .filter((obj: any) => {
-                const searchTermLower = searchTerm.toLowerCase();
-                const textLower = obj.text.toLowerCase();
-                
-                const isExactMatch = textLower === searchTermLower;
-                const isPartialMatch = textLower.includes(searchTermLower) || searchTermLower.includes(textLower);
-                const words = textLower.split(/\s+/);
-                const isWordMatch = words.some((word: string) => 
-                  word === searchTermLower || 
-                  word.includes(searchTermLower) || 
-                  searchTermLower.includes(word)
-                );
-                
-                return isExactMatch || isPartialMatch || isWordMatch;
-              })
-              .map((obj: any) => ({
-                text: obj.text,
-                bbox: obj.bbox,
-                confidence: obj.confidence,
-                pageIndex: index,
-                match_type: 'text',
-                isObject: false
-              }));
-            allResults.push(...textResults);
-            if (!resultPages.includes(index)) {
-              resultPages.push(index);
-            }
-          }
-
-          if (result.detected_objects && result.detected_objects.length > 0) {
-            const objectResults = result.detected_objects
-              .filter((obj: any) => {
-                const objectName = (obj.name || obj.text || '').toLowerCase();
-                const searchTermLower = searchTerm.toLowerCase();
-                
-                if (/[가-힣]/.test(searchTerm)) {
-                  if (objectName.includes(searchTermLower)) return true;
-                  const koreanMatches = koreanToEnglish[searchTermLower] || [];
-                  return koreanMatches.some(english => objectName.includes(english.toLowerCase()));
-                }
-                
-                if (/[a-zA-Z]/.test(searchTerm)) {
-                  if (objectName.includes(searchTermLower)) return true;
-                  const englishMatches = englishToKorean[objectName] || [];
-                  return englishMatches.some(korean => searchTermLower.includes(korean));
-                }
-                
-                return false;
-              })
-              .map((obj: any) => ({
-                text: obj.name || obj.text,
-                bbox: obj.bbox,
-                confidence: obj.confidence,
-                pageIndex: index,
-                match_type: 'object',
-                isObject: true
-              }));
-            allResults.push(...objectResults);
-            if (!resultPages.includes(index)) {
-              resultPages.push(index);
-            }
-          }
-
-          // OCR 결과 캐시 업데이트
-          if (result.ocr_text && result.objects) {
-            setOcrCache(prev => new Map(prev).set(mediaItems[index].id, {
-              text: result.ocr_text,
-              objects: result.objects
-            }));
-          }
-        });
-      }
-      
-      if (allResults.length > 0) {
-        console.log('검색 결과 발견:', allResults);
-        setDetectedObjects(allResults);
+      if (data.matches && data.matches.length > 0) {
+        console.log('검색 결과 발견:', data.matches);
+        setDetectedObjects(data.matches);
         setNoResults(false);
-        setSearchResultPages(resultPages);
-        
-        // 현재 페이지에 결과가 있는지 확인
-        const hasResultsOnCurrentPage = allResults.some(obj => obj.pageIndex === currentPage);
-        
-        if (!hasResultsOnCurrentPage) {
-          // 현재 페이지에 결과가 없으면 첫 번째 결과가 있는 페이지로 이동
-          const firstResultPage = resultPages[0];
-          if (firstResultPage !== undefined) {
-            handlePageChange(firstResultPage);
-            const targetMedia = mediaItems[firstResultPage];
-            setSelectedMedia(targetMedia);
-            setMediaType(targetMedia.type);
-            setMediaUrl(targetMedia.url);
-            if (targetMedia.imageType) {
-              setSelectedImageType(targetMedia.imageType);
-            }
-          }
-        } else {
-          // 현재 페이지에 결과가 있으면 이전/다음 페이지 알림 설정
-          const prevPage = resultPages.find(p => p < currentPage);
-          const nextPage = resultPages.find(p => p > currentPage);
-          
-          if (prevPage !== undefined) {
-            setPageNotification({ show: true, direction: 'prev' });
-          } else if (nextPage !== undefined) {
-            setPageNotification({ show: true, direction: 'next' });
-          } else {
-            setPageNotification({ show: false, direction: null });
-          }
-        }
+        setShowSearchModal(true);
       } else {
         console.log('검색 결과 없음');
         setDetectedObjects([]);
         setNoResults(true);
-        setSearchResultPages([]);
-        setPageNotification({ show: false, direction: null });
+        setShowSearchModal(false);
       }
     } catch (error) {
       console.error('검색 오류:', error);
@@ -1430,7 +1306,7 @@ const App: React.FC = () => {
                       <div className="preview-overlay">
                         <button 
                           className="view-results-button"
-                          onClick={() => setIsModalOpen(true)}
+                          onClick={() => setShowSearchModal(true)}
                         >
                           <i className="fas fa-search"></i>
                           결과 보기
@@ -1823,10 +1699,10 @@ const App: React.FC = () => {
         )}
       </div>
 
-      {isModalOpen && (
+      {showSearchModal && (
         <div 
           className="modal-overlay"
-          onClick={() => setIsModalOpen(false)}
+          onClick={() => setShowSearchModal(false)}
           style={{
             position: 'fixed',
             top: 0,
@@ -1851,7 +1727,7 @@ const App: React.FC = () => {
             }}
           >
             <button
-              onClick={() => setIsModalOpen(false)}
+              onClick={() => setShowSearchModal(false)}
               style={{
                 position: 'absolute',
                 top: '-40px',
@@ -1871,7 +1747,7 @@ const App: React.FC = () => {
                 <img
                   ref={modalImageRef}
                   src={mediaUrl}
-                  alt="Enlarged view"
+                  alt="검색 결과"
                   style={{
                     maxWidth: '100%',
                     maxHeight: '90vh',
@@ -1895,7 +1771,6 @@ const App: React.FC = () => {
                     {detectedObjects.map((obj, index) => {
                       const bbox = obj.bbox;
                       const isNormalized = bbox.x1 <= 1 && bbox.x2 <= 1 && bbox.y1 <= 1 && bbox.y2 <= 1;
-                      let x: number, y: number, width: number, height: number;
                       
                       // 이미지의 실제 표시 크기와 원본 크기 계산
                       const displayWidth = modalImageRef.current!.width;
@@ -1909,6 +1784,8 @@ const App: React.FC = () => {
                       const scaledHeight = originalHeight * scale;
                       const offsetX = (displayWidth - scaledWidth) / 2;
                       const offsetY = (displayHeight - scaledHeight) / 2;
+                      
+                      let x: number, y: number, width: number, height: number;
                       
                       if (isNormalized) {
                         // 정규화된 좌표를 실제 표시 크기로 변환
@@ -1933,9 +1810,9 @@ const App: React.FC = () => {
                               top: y,
                               width: width,
                               height: height,
-                              border: obj.isObject ? '2px solid #00ff00' : '2px solid #ff0000',
-                              backgroundColor: obj.isObject ? 'rgba(0, 255, 0, 0.1)' : 'rgba(255, 0, 0, 0.1)',
-                              borderRadius: obj.isObject ? '0' : '50%',
+                              border: obj.match_type === 'object' ? '2px solid #00ff00' : '2px solid #ff0000',
+                              backgroundColor: obj.match_type === 'object' ? 'rgba(0, 255, 0, 0.1)' : 'rgba(255, 0, 0, 0.1)',
+                              borderRadius: obj.match_type === 'object' ? '0' : '50%',
                               zIndex: 999999999999999,
                               pointerEvents: 'none'
                             }}
@@ -1945,7 +1822,7 @@ const App: React.FC = () => {
                               position: 'absolute',
                               left: x,
                               top: y - 20,
-                              backgroundColor: obj.isObject ? 'rgba(0, 255, 0, 0.8)' : 'rgba(255, 0, 0, 0.8)',
+                              backgroundColor: obj.match_type === 'object' ? 'rgba(0, 255, 0, 0.8)' : 'rgba(255, 0, 0, 0.8)',
                               color: 'white',
                               padding: '2px 6px',
                               borderRadius: '4px',
@@ -1956,7 +1833,7 @@ const App: React.FC = () => {
                               whiteSpace: 'nowrap'
                             }}
                           >
-                            {obj.text}
+                            {obj.text} ({(obj.confidence * 100).toFixed(1)}%)
                           </div>
                         </div>
                       );
