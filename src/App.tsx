@@ -1132,12 +1132,59 @@ const App: React.FC = () => {
     e.preventDefault();
   };
 
-  const handleTaskClick = async (taskTitle: string) => {
+  const handleTaskClick = async (taskTitleOrEvent: string | React.MouseEvent<HTMLButtonElement>) => {
+    // MouseEvent인 경우 chatMessage를 사용
+    const taskTitle = typeof taskTitleOrEvent === 'string' ? taskTitleOrEvent : chatMessage;
+    
     // chatMessage 상태를 task 제목으로 설정
     setChatMessage(taskTitle);
     
-    // handleChat 함수를 호출하여 분석 수행
-    await handleChat();
+    // 비디오 타입인 경우 selectedVideo를 사용
+    if (selectedVideo) {
+      const formData = new FormData();
+      formData.append('session_id', selectedVideo.sessionId!);
+      formData.append('message', taskTitle);
+      
+      // 비디오의 타임라인 데이터 사용
+      if (timeline.length > 0) {
+        const videoText = timeline
+          .map(item => item.texts.map(t => t.text).join(' '))
+          .join('\n\n');
+        formData.append('ocr_text', videoText);
+        formData.append('use_ocr', 'true');
+      }
+      
+      const response = await fetch('http://localhost:5001/summarize', {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || '채팅 처리 중 오류가 발생했습니다.');
+      }
+      
+      const data = await response.json();
+      if (data.error) {
+        throw new Error('분석 중 오류가 발생했습니다.');
+      }
+      
+      // 시스템 메시지 제거하고 핵심 내용만 표시
+      const cleanResponse = data.summary
+        .replace(/^.*?프로젝트 참여 팀원은 다음과 같습니다:\s*/g, '')
+        .replace(/^.*?OCR 텍스트를 통해.*?정보를 확인할 수 있습니다\.\s*/g, '')
+        .replace(/^.*?죄송합니다.*?감지되지 않았습니다\.\s*/g, '')
+        .replace(/^.*?이미지에서 객체가 감지되지 않았습니다\.\s*/g, '')
+        .replace(/^.*?CSS 코딩 연습에 대한 정보가.*?발견되지 않았습니다\.\s*/g, '')
+        .replace(/^.*?OCR 텍스트에는.*?포함되어 있지만.*?분석은 이루어지지 않았습니다\.\s*/g, '')
+        .replace(/^.*?따라서 해당 질문에 대한 답변을 제공할 수 없습니다\.\s*/g, '')
+        .replace(/^.*?부득이하게 OCR 텍스트에 포함된 내용을.*?필요합니다\.\s*/g, '')
+        .trim();
+      setChatResponse(cleanResponse);
+    } else if (selectedMedia) {
+      // 이미지 타입인 경우 기존 handleChat 함수 호출
+      await handleChat();
+    }
   };
 
   const handleTaskSuggestionMouseDown = (e: React.MouseEvent) => {
@@ -1497,9 +1544,9 @@ const App: React.FC = () => {
                 className="chat-input"
               />
               <button 
-                onClick={handleChat} 
+                onClick={handleTaskClick} 
                 className="chat-button"
-                disabled={!selectedMedia}
+                disabled={!selectedMedia && !selectedVideo}
               >
                 분석하기
               </button>
