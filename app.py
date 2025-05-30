@@ -707,39 +707,50 @@ def extract_frames_from_video(video_path, interval=2.0, max_frames=None):
 
 def process_frame_chunk(chunk_data):
     chunk_results = []
-    for frame, timestamp in chunk_data:
-        # 프레임을 임시 이미지 파일로 저장
-        temp_frame_path = os.path.join(UPLOAD_FOLDER, f'temp_frame_{timestamp}.jpg')
-        cv2.imwrite(temp_frame_path, frame)
-        
-        try:
-            # OCR 실행
-            text_blocks, detected_objects = extract_text_with_vision(temp_frame_path)
+    temp_files = []  # 임시 파일 목록 추적
+    
+    try:
+        for frame, timestamp in chunk_data:
+            # 임시 파일 경로 생성 (타임스탬프를 포함하여 중복 방지)
+            temp_frame_path = os.path.join(UPLOAD_FOLDER, f'temp_frame_{timestamp}_{int(time.time())}.jpg')
+            temp_files.append(temp_frame_path)  # 임시 파일 목록에 추가
             
-            if text_blocks:
-                # 현재 프레임의 OCR 텍스트 저장
-                frame_text = '\n'.join([block['text'] for block in text_blocks])
+            # 프레임을 임시 이미지 파일로 저장
+            cv2.imwrite(temp_frame_path, frame)
+            
+            try:
+                # OCR 실행 (객체 분석 제외)
+                text_blocks, _ = extract_text_with_vision(temp_frame_path)
                 
-                # 한 글자씩 분리된 텍스트를 문장으로 결합
-                combined_text = ''
-                current_sentence = ''
-                for char in frame_text:
-                    if char in ['\n', ' ']:
-                        if current_sentence:
-                            combined_text += current_sentence + char
-                            current_sentence = ''
-                    else:
-                        current_sentence += char
-                if current_sentence:
-                    combined_text += current_sentence
-                
-                chunk_results.append((timestamp, combined_text, text_blocks))
-        except Exception as e:
-            print(f"프레임 처리 중 오류 발생: {str(e)}")
-        finally:
-            # 임시 파일 삭제
-            if os.path.exists(temp_frame_path):
-                os.remove(temp_frame_path)
+                if text_blocks:
+                    # 현재 프레임의 OCR 텍스트 저장
+                    frame_text = '\n'.join([block['text'] for block in text_blocks])
+                    
+                    # 한 글자씩 분리된 텍스트를 문장으로 결합
+                    combined_text = ''
+                    current_sentence = ''
+                    for char in frame_text:
+                        if char in ['\n', ' ']:
+                            if current_sentence:
+                                combined_text += current_sentence + char
+                                current_sentence = ''
+                        else:
+                            current_sentence += char
+                    if current_sentence:
+                        combined_text += current_sentence
+                    
+                    chunk_results.append((timestamp, combined_text, text_blocks))
+            except Exception as e:
+                print(f"프레임 처리 중 오류 발생: {str(e)}")
+    finally:
+        # 모든 임시 파일 삭제
+        for temp_file in temp_files:
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    print(f"임시 파일 삭제됨: {temp_file}")
+            except Exception as e:
+                print(f"임시 파일 삭제 중 오류 발생: {str(e)}")
     
     return chunk_results
 
@@ -757,9 +768,9 @@ def process_video(video_path, query, mode='normal', session_id=None):
     duration = int(total_frames / fps)  # 정수로 변환
     cap.release()
     
-    # 비디오 길이에 따라 최대 프레임 수 조정
-    max_frames = min(30, duration)  # 최대 30프레임으로 제한
-    frames, timestamps = extract_frames_from_video(video_path, interval=3.0, max_frames=max_frames)  # 3초 간격으로 변경
+    # 비디오 길이에 따라 최대 프레임 수 조정 (더 적은 프레임으로 처리)
+    max_frames = min(20, duration)  # 최대 20프레임으로 제한
+    frames, timestamps = extract_frames_from_video(video_path, interval=5.0, max_frames=max_frames)  # 5초 간격으로 변경
     
     timeline_results = []
     all_ocr_text = []  # 모든 OCR 텍스트를 저장할 리스트
@@ -2236,6 +2247,30 @@ def seek_timestamp():
     except Exception as e:
         print(f"타임스탬프 이동 중 오류 발생: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+def get_timeline(session_id):
+    """타임라인 결과 반환"""
+    if session_id not in ocr_results_cache:
+        return jsonify({
+            'error': '세션을 찾을 수 없습니다.',
+            'timeline': [],
+            'videos': []
+        })
+    
+    session_data = ocr_results_cache[session_id]
+    timeline = session_data.get('timeline', [])
+    videos = session_data.get('videos', [])
+    
+    # 비디오 타임라인에 타임스탬프 정보 추가
+    for video in videos:
+        if 'timeline' in video:
+            for item in video['timeline']:
+                item['timestamp'] = item.get('timestamp', 0)  # 타임스탬프 정보 추가
+    
+    return jsonify({
+        'timeline': timeline,
+        'videos': videos
+    })
 
 if __name__ == '__main__':
     app.run(port=5001, debug=True)

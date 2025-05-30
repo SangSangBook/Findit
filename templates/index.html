@@ -50,6 +50,80 @@
     </div>
 </div>
 
+<script>
+// 비디오 플레이어와 타임라인 동기화
+function syncTimelineWithVideo() {
+    const videoPlayer = document.querySelector('video');
+    const timelineItems = document.querySelectorAll('.timeline-item');
+    
+    if (!videoPlayer || !timelineItems.length) return;
+    
+    // 비디오 시간이 변경될 때마다 타임라인 하이라이트
+    videoPlayer.addEventListener('timeupdate', () => {
+        const currentTime = videoPlayer.currentTime;
+        
+        timelineItems.forEach(item => {
+            const timestamp = parseFloat(item.dataset.timestamp);
+            if (Math.abs(currentTime - timestamp) < 1) {  // 1초 이내의 차이면 하이라이트
+                item.classList.add('active');
+                item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            } else {
+                item.classList.remove('active');
+            }
+        });
+    });
+    
+    // 타임라인 클릭 시 비디오 시간 이동
+    timelineItems.forEach(item => {
+        item.addEventListener('click', () => {
+            const timestamp = parseFloat(item.dataset.timestamp);
+            videoPlayer.currentTime = timestamp;
+            videoPlayer.play();
+        });
+    });
+}
+
+// 타임라인 아이템 생성 함수 수정
+function createTimelineItem(item) {
+    const timelineItem = document.createElement('div');
+    timelineItem.className = 'timeline-item';
+    timelineItem.dataset.timestamp = item.timestamp;  // 타임스탬프 데이터 속성 추가
+    
+    const timeDisplay = document.createElement('div');
+    timeDisplay.className = 'timeline-time';
+    timeDisplay.textContent = formatTime(item.timestamp);
+    
+    const textDisplay = document.createElement('div');
+    textDisplay.className = 'timeline-text';
+    textDisplay.textContent = item.texts.map(t => t.text).join(', ');
+    
+    timelineItem.appendChild(timeDisplay);
+    timelineItem.appendChild(textDisplay);
+    
+    return timelineItem;
+}
+
+// 타임라인 업데이트 함수 수정
+function updateTimeline(data) {
+    const timelineContainer = document.getElementById('timeline');
+    timelineContainer.innerHTML = '';
+    
+    if (data.videos && data.videos.length > 0) {
+        data.videos.forEach(video => {
+            if (video.timeline && video.timeline.length > 0) {
+                video.timeline.forEach(item => {
+                    const timelineItem = createTimelineItem(item);
+                    timelineContainer.appendChild(timelineItem);
+                });
+            }
+        });
+    }
+    
+    // 타임라인과 비디오 동기화 설정
+    syncTimelineWithVideo();
+}
+</script>
+
 <style>
     .container {
         max-width: 1200px;
@@ -147,5 +221,33 @@
 
     .youtube-title {
         margin-right: 30px !important;
+    }
+
+    .timeline-item {
+        padding: 10px;
+        margin: 5px 0;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background-color 0.3s;
+    }
+
+    .timeline-item:hover {
+        background-color: #f0f0f0;
+    }
+
+    .timeline-item.active {
+        background-color: #e3f2fd;
+        border-left: 3px solid #2196f3;
+    }
+
+    .timeline-time {
+        font-size: 0.9em;
+        color: #666;
+        margin-bottom: 5px;
+    }
+
+    .timeline-text {
+        font-size: 1em;
+        color: #333;
     }
 </style> 
