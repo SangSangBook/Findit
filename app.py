@@ -818,7 +818,13 @@ def process_video(video_path, query, mode='normal', session_id=None):
             if detected_texts:
                 timeline_results.append({
                     'timestamp': timestamp,
-                    'texts': detected_texts
+                    'texts': [{
+                        'text': text['text'],
+                        'bbox': text['bbox'],
+                        'confidence': text['confidence'],
+                        'color': '#000000',  # 검정색으로 변경
+                        'match_type': 'smart'
+                    } for text in detected_texts]
                 })
     
     # 전체 OCR 텍스트를 하나의 문자열로 결합
@@ -1579,11 +1585,12 @@ def analyze_image():
                                 'match_type': 'text',
                                 'style': {
                                     'position': 'absolute',
-                                    'border': '2px solid #ff0000',
+                                    'border': '2px solid #000000',
                                     'borderRadius': '50%',
-                                    'backgroundColor': 'rgba(255, 0, 0, 0.1)',
+                                    'backgroundColor': 'rgba(0, 0, 0, 0.1)',
                                     'zIndex': 999999999999999,
-                                    'pointerEvents': 'none'
+                                    'pointerEvents': 'none',
+                                    'color': '#000000'
                                 }
                             })
             else:
@@ -1642,11 +1649,12 @@ def analyze_image():
                                 'match_type': 'text',
                                 'style': {
                                     'position': 'absolute',
-                                    'border': '2px solid #ff0000',
+                                    'border': '2px solid #000000',
                                     'borderRadius': '50%',
-                                    'backgroundColor': 'rgba(255, 0, 0, 0.1)',
+                                    'backgroundColor': 'rgba(0, 0, 0, 0.1)',
                                     'zIndex': 999999999999999,
-                                    'pointerEvents': 'none'
+                                    'pointerEvents': 'none',
+                                    'color': '#000000'
                                 }
                             })
 
