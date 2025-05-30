@@ -52,8 +52,6 @@ client = OpenAI(api_key=OPENAI_API_KEY)  # API 키를 명시적으로 전달
 API_KEY = os.getenv('GOOGLE_CLOUD_VISION_API_KEY')
 if not API_KEY:
     print("경고: GOOGLE_CLOUD_VISION_API_KEY가 설정되지 않았습니다.")
-# else:
-#     print(f"Google Vision API 키가 설정되었습니다. (길이: {len(API_KEY)}자)")
 VISION_API_URL = f'https://vision.googleapis.com/v1/images:annotate?key={API_KEY}'
 
 # 연관어 캐시
@@ -63,17 +61,17 @@ related_words_cache = {}
 gmaps = googlemaps.Client(key=API_KEY)  # Vision API와 동일한 키 사용
 
 # Google Cloud Vision 클라이언트 초기화
+vision_client = None
 try:
     credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
     if credentials_path and os.path.exists(credentials_path):
         credentials = service_account.Credentials.from_service_account_file(credentials_path)
         vision_client = vision.ImageAnnotatorClient(credentials=credentials)
+        print("Google Cloud Vision 클라이언트가 서비스 계정으로 초기화되었습니다.")
     else:
-        vision_client = vision.ImageAnnotatorClient()
-    # print("Google Cloud Vision 클라이언트가 성공적으로 초기화되었습니다.")
+        print("Google Cloud Vision API 키만 사용하여 API 호출을 수행합니다.")
 except Exception as e:
     print(f"Google Cloud Vision 클라이언트 초기화 오류: {str(e)}")
-    vision_client = None
 
 # OCR 결과를 저장할 전역 변수
 ocr_results_cache = {}
@@ -370,6 +368,7 @@ def parse_gpt_response(response):
     return boxes
 
 def extract_text_with_vision(image_path):
+    global vision_client
     try:
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Image file not found: {image_path}")
@@ -421,32 +420,61 @@ def extract_text_with_vision(image_path):
             ]
         }
         
+        result = None
+        max_retries = 3
+        retry_delay = 2
+        
         # API 호출 - vision_client 사용
         if vision_client:
-            image = vision.Image(content=content)
-            response = vision_client.annotate_image({
-                'image': image,
-                'features': [
-                    {'type_': vision.Feature.Type.TEXT_DETECTION, 'max_results': 50},
-                    {'type_': vision.Feature.Type.OBJECT_LOCALIZATION, 'max_results': 10}
-                ],
-                'image_context': {
-                    'language_hints': ['ko', 'en'],
-                    'text_detection_params': {
-                        'enable_text_detection_confidence_score': True
+            try:
+                image = vision.Image(content=content)
+                response = vision_client.annotate_image({
+                    'image': image,
+                    'features': [
+                        {'type_': vision.Feature.Type.TEXT_DETECTION, 'max_results': 50},
+                        {'type_': vision.Feature.Type.OBJECT_LOCALIZATION, 'max_results': 10}
+                    ],
+                    'image_context': {
+                        'language_hints': ['ko', 'en'],
+                        'text_detection_params': {
+                            'enable_text_detection_confidence_score': True
+                        }
                     }
-                }
-            })
-            result = response.to_dict()
-        else:
-            current_api_key = os.getenv('GOOGLE_CLOUD_VISION_API_KEY')
-            if not current_api_key:
+                })
+                result = response.to_dict()
+                print("Vision client API 호출 성공")
+            except Exception as e:
+                print(f"Vision client API 호출 실패, REST API로 전환: {str(e)}")
+                vision_client = None
+        
+        # vision_client가 없거나 실패한 경우 REST API 사용
+        if not result:
+            if not API_KEY:
                 raise ValueError("Google Cloud Vision API 키가 설정되지 않았습니다.")
             
-            vision_api_url = f'https://vision.googleapis.com/v1/images:annotate?key={current_api_key}'
-            response = requests.post(vision_api_url, json=request_data)
-            response.raise_for_status()
-            result = response.json()
+            for attempt in range(max_retries):
+                try:
+                    print(f"REST API 호출 시도 {attempt + 1}/{max_retries}...")
+                    response = requests.post(VISION_API_URL, json=request_data, timeout=30)  # 30초 타임아웃 설정
+                    response.raise_for_status()
+                    result = response.json()
+                    print("REST API 호출 성공")
+                    break
+                except requests.Timeout:
+                    print(f"API 호출 타임아웃 (시도 {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                    else:
+                        raise Exception("API 호출 타임아웃으로 인한 실패")
+                except requests.RequestException as e:
+                    print(f"API 호출 실패 (시도 {attempt + 1}/{max_retries}): {str(e)}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                    else:
+                        raise Exception(f"API 호출 실패: {str(e)}")
+
+        if not result:
+            raise Exception("API 호출 결과가 없습니다.")
 
         # 텍스트 검출 결과 처리
         text_blocks = []
@@ -459,6 +487,7 @@ def extract_text_with_vision(image_path):
             if 'textAnnotations' in response:
                 # 전체 텍스트를 하나의 블록으로 처리
                 full_text = response['textAnnotations'][0]['description'] if response['textAnnotations'] else ""
+                print(f"추출된 텍스트: {full_text}")
                 
                 # 각 텍스트 블록의 좌표 정보 처리
                 for text_annotation in response['textAnnotations'][1:]:  # 첫 번째는 전체 텍스트이므로 건너뛰기
@@ -510,9 +539,12 @@ def extract_text_with_vision(image_path):
                         'match_type': 'object'
                     })
         
+        print(f"텍스트 블록 수: {len(text_blocks)}, 감지된 객체 수: {len(detected_objects)}")
         return text_blocks, detected_objects
     except Exception as e:
         print(f"Error in extract_text_with_vision: {e}")
+        import traceback
+        print(traceback.format_exc())
         return [], []
 
 def combine_vertical_texts(coordinates):
